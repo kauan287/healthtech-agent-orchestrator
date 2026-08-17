@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Entorno virtual y dependencias
+.venv/
+__pycache__/
+*.pyc
+
+# Claves y configuración local
+.env
+.env.backup
+
+# Tests y cobertura
+.pytest_cache/
