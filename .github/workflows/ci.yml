@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+# Environment variables available to all jobs
+env:
+  # A non-empty key is required for ChatGroq to instantiate without error.
+  # LLM calls are mocked in every test — no real API requests are made.
+  GROQ_API_KEY: "ci-test-key-not-used"
+  # Points to localhost Postgres (unavailable in CI), but the server
+  # degrades gracefully — DB writes are wrapped in try/except.
+  DATABASE_URL: "postgresql+psycopg2://healthtech:healthtech@localhost:5432/healthtech_db"
+  ENVIRONMENT: "test"
+
+jobs:
+  # ── Lint & type check ────────────────────────────────────────────────────────
+  lint:
+    name: "Lint & Type Check"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install all dependencies (including dev group)
+        run: uv sync --all-groups
+
+      - name: Lint with ruff
+        run: uv run ruff check src/ tests/
+
+      - name: Check formatting with ruff
+        run: uv run ruff format --check src/ tests/
+
+      - name: Type check with mypy
+        run: uv run mypy src/ --ignore-missing-imports --no-error-summary
+
+  # ── Tests with coverage ──────────────────────────────────────────────────────
+  test:
+    name: "Unit & Integration Tests"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install all dependencies (including dev group)
+        run: uv sync --all-groups
+
+      - name: Run pytest with coverage
+        run: |
+          uv run pytest tests/ \
+            -v \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --tb=short
+
+      - name: Upload coverage report to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ── Docker build smoke test ──────────────────────────────────────────────────
+  docker:
+    name: "Docker Build"
+    runs-on: ubuntu-latest
+    # Only build after lint + tests pass
+    needs: [lint, test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t healthtech-agent-orchestrator:ci .
+
+      - name: Smoke-test container starts and /health responds
+        run: |
+          docker run -d \
+            --name healthtech_smoke \
+            -e GROQ_API_KEY=ci-test \
+            -e DATABASE_URL=postgresql+psycopg2://x:x@localhost/x \
+            -e ENVIRONMENT=test \
+            -p 8000:8000 \
+            healthtech-agent-orchestrator:ci
+          # Wait for uvicorn to be ready
+          timeout 30 bash -c 'until curl -sf http://localhost:8000/health; do sleep 1; done'
+          docker stop healthtech_smoke
