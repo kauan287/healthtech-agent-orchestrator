@@ -13,6 +13,26 @@
 
 ---
 
+## 🔗 Part of the MedTech Ecosystem
+
+This project is **Project 1** of a two-project medtech portfolio. It generates and doctor-approves
+prescriptions; [SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) consumes them
+to physically release medication from smart vending machines.
+
+```
+HealthTech Agent Orchestrator (this repo)       SmartDispenser Core (Project 2)
+  Python · FastAPI · LangGraph · PostgreSQL   →   C# · ASP.NET Core 9 · SignalR · EF Core
+
+  Triage Agent evaluates prescription              Verifies approval + audit chain
+  Safety Agent checks allergies                    Validates payment (HMAC webhook)
+  Doctor approves via HITL                         Commands physical machine via SignalR
+  SHA-256 audit chain signed                       Blazor real-time dashboard
+```
+
+📦 **[SmartDispenser Core →](https://github.com/kauan287/smartdispenser-core)**
+
+---
+
 ## 🏗️ Architecture
 
 The system runs a two-stage LangGraph multi-agent pipeline. Each step is recorded in a **blockchain-style hash chain** — making any retroactive data manipulation detectable at the application level.
