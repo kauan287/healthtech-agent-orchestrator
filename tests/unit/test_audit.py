@@ -5,12 +5,13 @@ These tests are pure Python — no LLM, no database, no network.
 They verify the SHA-256 hash-chaining logic that makes the audit
 trail tamper-evident.
 """
+
 import pytest
 
 from src.audit import calculate_log_hash, create_audit_entry, verify_audit_chain
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def build_chain(n: int) -> list[dict]:
     """Build a valid audit chain of length *n*."""
@@ -28,6 +29,7 @@ def build_chain(n: int) -> list[dict]:
 
 
 # ── Unit tests ────────────────────────────────────────────────────────────────
+
 
 class TestCreateAuditEntry:
     def test_genesis_entry_uses_genesis_hash(self):

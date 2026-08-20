@@ -5,12 +5,11 @@ Verifies that the graph wires nodes correctly and that the HITL
 interrupt fires after the safety_agent node — without invoking
 any real LLM calls.
 """
-import pytest
+
 from unittest.mock import patch
 
 from src.graph import create_app
-from src.schemas import TriageRecommendation, SafetyCheck
-
+from src.schemas import SafetyCheck, TriageRecommendation
 
 TRIAGE_MOCK = TriageRecommendation(
     proposed_medication="Paracetamol",
@@ -121,7 +120,9 @@ class TestGraphStructure:
 
             final_state = app.get_state(config)
             # After resuming and completing, the graph should have no pending tasks
-            is_still_paused = len(final_state.tasks) > 0 or len(getattr(final_state, 'interrupts', ())) > 0
+            is_still_paused = (
+                len(final_state.tasks) > 0 or len(getattr(final_state, "interrupts", ())) > 0
+            )
             assert not is_still_paused, "Graph should have completed after update_state + stream"
             assert final_state.values["human_approved"] is True
 

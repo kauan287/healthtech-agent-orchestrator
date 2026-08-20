@@ -5,8 +5,9 @@ The engine is created lazily (SQLAlchemy default) — no connection
 is made at import time. Startup errors (e.g. Postgres not reachable)
 are caught in the FastAPI lifespan handler.
 """
+
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker

@@ -1,23 +1,25 @@
 from pydantic import BaseModel
-from typing import List, Optional
+
 
 class CreatePrescriptionRequest(BaseModel):
     prescription_id: str
     patient_symptoms: str
-    patient_allergies: List[str]
+    patient_allergies: list[str]
+
 
 class DoctorApprovalRequest(BaseModel):
     approved: bool
     doctor_comments: str
 
+
 class PrescriptionResponse(BaseModel):
     thread_id: str
     prescription_id: str
-    proposed_medication: Optional[str]
-    dosage: Optional[str]
+    proposed_medication: str | None
+    dosage: str | None
     safety_approved: bool
-    risk_notes: Optional[str]
-    human_approved: Optional[bool]
-    doctor_comments: Optional[str]
+    risk_notes: str | None
+    human_approved: bool | None
+    doctor_comments: str | None
     is_paused_waiting_approval: bool
     audit_chain_valid: bool

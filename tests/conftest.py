@@ -14,14 +14,15 @@ test_client fixture because the FastAPI lifespan targets Postgres
 (which is unavailable in CI) and gracefully skips the create_all call.
 The SQLAlchemy JSON column type works transparently with SQLite.
 """
-import pytest
-from sqlalchemy import create_engine, StaticPool
-from sqlalchemy.orm import sessionmaker, Session
+
 from unittest.mock import patch
 
-from src.db.models import Base
-from src.schemas import TriageRecommendation, SafetyCheck
+import pytest
+from sqlalchemy import StaticPool, create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.models import Base
+from src.schemas import SafetyCheck, TriageRecommendation
 
 # ── Mock LLM responses ────────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ def mock_llm_rejected():
 
 # ── In-memory SQLite DB ───────────────────────────────────────────────────────
 
+
 @pytest.fixture(scope="session")
 def test_engine():
     """
@@ -103,6 +105,7 @@ def db_session(test_engine) -> Session:
 
 # ── FastAPI test client ───────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def test_client(db_session, mock_llm_approved):
     """
@@ -111,6 +114,7 @@ def test_client(db_session, mock_llm_approved):
       - DB dependency overridden to use in-memory SQLite
     """
     from fastapi.testclient import TestClient
+
     from src.server import app, get_db
 
     def override_get_db():
@@ -128,6 +132,7 @@ def test_client(db_session, mock_llm_approved):
 def test_client_rejected(db_session, mock_llm_rejected):
     """FastAPI TestClient where the safety agent rejects the prescription."""
     from fastapi.testclient import TestClient
+
     from src.server import app, get_db
 
     def override_get_db():

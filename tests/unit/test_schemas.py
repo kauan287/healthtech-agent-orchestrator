@@ -3,15 +3,16 @@ Unit tests for Pydantic schemas (src/schemas.py and src/api_schemas.py).
 
 Fast, dependency-free validation of model constraints.
 """
+
 import pytest
 from pydantic import ValidationError
 
-from src.schemas import SafetyCheck, TriageRecommendation
 from src.api_schemas import (
     CreatePrescriptionRequest,
     DoctorApprovalRequest,
     PrescriptionResponse,
 )
+from src.schemas import SafetyCheck, TriageRecommendation
 
 
 class TestTriageRecommendation:

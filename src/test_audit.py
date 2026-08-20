@@ -8,7 +8,7 @@ if __name__ == "__main__":
         previous_log=None,
         step="TRIAGE_AGENT",
         action="Proposal Generated",
-        details={"medication": "Paracetamol", "dosage": "500mg"}
+        details={"medication": "Paracetamol", "dosage": "500mg"},
     )
     logs.append(entry1)
 
@@ -17,7 +17,7 @@ if __name__ == "__main__":
         previous_log=logs[-1],
         step="SAFETY_AGENT",
         action="Safety Validation",
-        details={"is_safe": True, "risk_notes": "Sin alergias"}
+        details={"is_safe": True, "risk_notes": "Sin alergias"},
     )
     logs.append(entry2)
 
@@ -28,7 +28,9 @@ if __name__ == "__main__":
 
     # 4. SIMULACIÓN DE ATAQUE / ALTERACIÓN DE DATOS (Hackeo de Base de Datos)
     print("\n--- Simulando alteración maliciosa en el registro 0 ---")
-    logs[0]["details"]["medication"] = "Morfina 100mg" # Alguien cambió el medicamento a espaldas del sistema
+    logs[0]["details"]["medication"] = (
+        "Morfina 100mg"  # Alguien cambió el medicamento a espaldas del sistema
+    )
 
     # 5. Volver a verificar la cadena
     is_valid, msg = verify_audit_chain(logs)

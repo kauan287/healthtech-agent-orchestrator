@@ -4,11 +4,11 @@ Repository layer — isolates all database access from business logic.
 Each repository is initialized with an injected SQLAlchemy Session,
 making them trivially testable with an in-memory SQLite session.
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -40,7 +40,7 @@ class PrescriptionRepository:
         self.session.flush()
         return record
 
-    def get_by_prescription_id(self, prescription_id: str) -> Optional[PrescriptionRecord]:
+    def get_by_prescription_id(self, prescription_id: str) -> PrescriptionRecord | None:
         return (
             self.session.query(PrescriptionRecord)
             .filter_by(prescription_id=prescription_id)
@@ -54,14 +54,14 @@ class PrescriptionRepository:
         dosage: str,
         safety_approved: bool,
         risk_notes: str,
-    ) -> Optional[PrescriptionRecord]:
+    ) -> PrescriptionRecord | None:
         record = self.get_by_prescription_id(prescription_id)
         if record:
             record.proposed_medication = proposed_medication
             record.dosage = dosage
             record.safety_approved = safety_approved
             record.risk_notes = risk_notes
-            record.updated_at = datetime.now(timezone.utc)
+            record.updated_at = datetime.now(UTC)
             self.session.flush()
         return record
 
@@ -70,13 +70,13 @@ class PrescriptionRepository:
         prescription_id: str,
         human_approved: bool,
         doctor_comments: str,
-    ) -> Optional[PrescriptionRecord]:
+    ) -> PrescriptionRecord | None:
         record = self.get_by_prescription_id(prescription_id)
         if record:
             record.human_approved = human_approved
             record.doctor_comments = doctor_comments
             record.status = "APPROVED" if human_approved else "REJECTED"
-            record.updated_at = datetime.now(timezone.utc)
+            record.updated_at = datetime.now(UTC)
             self.session.flush()
         return record
 
@@ -87,22 +87,16 @@ class AuditLogRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def bulk_create(
-        self, prescription_id: str, audit_logs: List[dict]
-    ) -> List[AuditLogRecord]:
+    def bulk_create(self, prescription_id: str, audit_logs: list[dict]) -> list[AuditLogRecord]:
         """
         Persist a list of audit log dicts.
 
         Idempotent: entries whose hash already exists are silently skipped,
         which makes this safe to call multiple times for the same logs.
         """
-        created: List[AuditLogRecord] = []
+        created: list[AuditLogRecord] = []
         for log in audit_logs:
-            existing = (
-                self.session.query(AuditLogRecord)
-                .filter_by(hash=log["hash"])
-                .first()
-            )
+            existing = self.session.query(AuditLogRecord).filter_by(hash=log["hash"]).first()
             if existing:
                 logger.debug("Skipping duplicate audit log hash=%s", log["hash"][:12])
                 continue
@@ -120,7 +114,7 @@ class AuditLogRepository:
         self.session.flush()
         return created
 
-    def get_by_prescription_id(self, prescription_id: str) -> List[AuditLogRecord]:
+    def get_by_prescription_id(self, prescription_id: str) -> list[AuditLogRecord]:
         return (
             self.session.query(AuditLogRecord)
             .filter_by(prescription_id=prescription_id)

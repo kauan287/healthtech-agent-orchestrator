@@ -1,8 +1,8 @@
-from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
 
+from src.agents import safety_agent_node, triage_agent_node
 from src.state import PrescriptionState
-from src.agents import triage_agent_node, safety_agent_node
 
 
 def create_app(interrupt_after=None):
@@ -22,7 +22,4 @@ def create_app(interrupt_after=None):
     builder.add_edge("safety_agent", END)
 
     memory = MemorySaver()
-    return builder.compile(
-        checkpointer=memory,
-        interrupt_after=interrupt_after or ["safety_agent"]
-    )
+    return builder.compile(checkpointer=memory, interrupt_after=interrupt_after or ["safety_agent"])

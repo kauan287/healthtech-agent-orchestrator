@@ -2,6 +2,7 @@
 Application settings loaded from environment variables or .env file.
 Uses pydantic-settings for type-safe configuration.
 """
+
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,9 +27,7 @@ class Settings(BaseSettings):
     # ── Database ───────────────────────────────────────────────────────────────
     # Full SQLAlchemy connection URL. Override in production via env var.
     # docker-compose provides a Postgres instance matching these defaults.
-    DATABASE_URL: str = (
-        "postgresql+psycopg2://healthtech:healthtech@localhost:5432/healthtech_db"
-    )
+    DATABASE_URL: str = "postgresql+psycopg2://healthtech:healthtech@localhost:5432/healthtech_db"
 
 
 @lru_cache

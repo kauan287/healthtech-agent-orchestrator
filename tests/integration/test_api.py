@@ -17,9 +17,9 @@ Tests cover:
   4. 404 for unknown session
   5. DB persistence verification
 """
+
 import uuid
 
-import pytest
 from sqlalchemy.orm import Session
 
 from src.db.models import AuditLogRecord, PrescriptionRecord
@@ -31,6 +31,7 @@ def unique_pid() -> str:
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
+
 
 class TestHealth:
     def test_health_returns_200(self, test_client):
@@ -45,6 +46,7 @@ class TestHealth:
 
 
 # ── Happy-path workflow ───────────────────────────────────────────────────────
+
 
 class TestPrescriptionHappyPath:
     """Full HITL workflow: create → check status → approve."""
@@ -163,6 +165,7 @@ class TestPrescriptionHappyPath:
 
 # ── Allergy rejection path ────────────────────────────────────────────────────
 
+
 class TestAllergyRejection:
     def test_safety_agent_flags_allergy(self, test_client_rejected):
         """When the safety LLM returns is_safe=False, safety_approved must be False."""
@@ -181,6 +184,7 @@ class TestAllergyRejection:
 
 # ── Error handling ────────────────────────────────────────────────────────────
 
+
 class TestErrorHandling:
     def test_get_unknown_session_returns_404(self, test_client):
         resp = test_client.get("/api/v1/prescriptions/session-nonexistent-xyz")
@@ -195,6 +199,7 @@ class TestErrorHandling:
 
 
 # ── DB persistence ────────────────────────────────────────────────────────────
+
 
 class TestDatabasePersistence:
     def test_prescription_record_created_in_db(self, test_client, db_session: Session):
@@ -223,11 +228,7 @@ class TestDatabasePersistence:
                 "patient_allergies": [],
             },
         )
-        audit_records = (
-            db_session.query(AuditLogRecord)
-            .filter_by(prescription_id=pid)
-            .all()
-        )
+        audit_records = db_session.query(AuditLogRecord).filter_by(prescription_id=pid).all()
         # Triage + Safety = 2 entries after initial flow
         assert len(audit_records) >= 2
         steps = [r.step for r in audit_records]

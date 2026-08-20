@@ -8,9 +8,10 @@ Key design decisions:
     still returns a correct response (degraded-but-functional mode).
   - The /health endpoint is dependency-free and always returns quickly.
 """
+
 import logging
+from collections.abc import Generator
 from contextlib import asynccontextmanager
-from typing import Generator
 
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session

@@ -5,9 +5,10 @@ Two tables are used:
   - prescriptions: one row per prescription workflow
   - audit_logs:    one row per audit chain entry (immutable once written)
 """
-from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, JSON, String, Text, Boolean
+from datetime import UTC, datetime
+
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -21,7 +22,9 @@ class PrescriptionRecord(Base):
     __tablename__ = "prescriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    prescription_id: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    prescription_id: Mapped[str] = mapped_column(
+        String(100), unique=True, index=True, nullable=False
+    )
     thread_id: Mapped[str] = mapped_column(String(200), unique=True, index=True, nullable=False)
     patient_symptoms: Mapped[str] = mapped_column(Text, nullable=False)
     patient_allergies: Mapped[list] = mapped_column(JSON, default=list)
@@ -35,12 +38,12 @@ class PrescriptionRecord(Base):
     status: Mapped[str] = mapped_column(String(50), default="PENDING_APPROVAL")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     def __repr__(self) -> str:
@@ -68,7 +71,7 @@ class AuditLogRecord(Base):
     hash: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
 
     def __repr__(self) -> str:
