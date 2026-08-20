@@ -1,6 +1,6 @@
 # 🏥 HealthTech Agent Orchestrator
 
-[![CI](https://github.com/kauan287/healthtech-agent-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/kauan287/healthtech-agent-orchestrator/actions/workflows/ci.yml)
+[![CI](https://github.com/kauan287/healthtech-agent-orchestrator/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/kauan287/healthtech-agent-orchestrator/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.140+-009688.svg?logo=fastapi)](https://fastapi.tiangolo.com)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.2+-FF6B35.svg)](https://langchain-ai.github.io/langgraph/)
@@ -15,23 +15,31 @@
 
 ## 🔗 Part of the MedTech Ecosystem
 
-This project is **Project 1** of a two-project medtech portfolio. It generates and doctor-approves
-prescriptions; [SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) consumes them
-to physically release medication from smart vending machines.
+This is **Project 1** of a two-project portfolio demonstrating a full end-to-end digital health pipeline.
+A prescription must pass through this AI + HITL system before the companion project physically releases the medication.
+
+| Project | Stack | Role |
+|---|---|---|
+| **HealthTech Agent Orchestrator** *(this repo)* | Python · FastAPI · LangGraph · PostgreSQL | AI triage, safety checks, doctor approval, cryptographic audit |
+| **[SmartDispenser Core](https://github.com/kauan287/smartdispenser-core)** [![CI](https://github.com/kauan287/smartdispenser-core/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/kauan287/smartdispenser-core/actions/workflows/ci.yml) | C# · ASP.NET Core 10 · SignalR · Blazor | Real-time hardware control, payment webhooks, live dashboard |
 
 ```
-HealthTech Agent Orchestrator (this repo)       SmartDispenser Core (Project 2)
-  Python · FastAPI · LangGraph · PostgreSQL   →   C# · ASP.NET Core 9 · SignalR · EF Core
-
-  Triage Agent evaluates prescription              Verifies approval + audit chain
-  Safety Agent checks allergies                    Validates payment (HMAC webhook)
-  Doctor approves via HITL                         Commands physical machine via SignalR
-  SHA-256 audit chain signed                       Blazor real-time dashboard
+┌──────────────────────────────────────┐     ┌──────────────────────────────────────┐
+│  HealthTech Agent Orchestrator       │     │  SmartDispenser Core                 │
+│  (this repo)                         │────▶│  github.com/kauan287/smartdispenser  │
+│                                      │     │                                      │
+│  1. Doctor submits prescription      │     │  5. Verify approval + audit chain ✓  │
+│  2. Triage Agent classifies          │     │  6. Validate HMAC payment webhook ✓  │
+│  3. Safety Agent checks allergies    │     │  7. Send SignalR command to machine  │
+│  4. Doctor approves (HITL) ✓        │     │  8. Blazor dashboard updates live    │
+│     SHA-256 audit chain signed       │     │                                      │
+└──────────────────────────────────────┘     └──────────────────────────────────────┘
 ```
 
-📦 **[SmartDispenser Core →](https://github.com/kauan287/smartdispenser-core)**
+📦 **[SmartDispenser Core → github.com/kauan287/smartdispenser-core](https://github.com/kauan287/smartdispenser-core)**
 
 ---
+
 
 ## 🏗️ Architecture
 
