@@ -1,44 +1,34 @@
-# ── Makefile ─────────────────────────────────────────────────────────────────
-# Convenience targets for local development.
-# Run `make help` to see all available commands.
+.PHONY: help install dev test lint format typecheck check e2e up down
 
-.PHONY: help install dev test test-unit test-integration lint format type-check up down clean
+help:  ## List targets
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-10s %s\n", $$1, $$2}'
 
-help:  ## Show this help message
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+install:  ## Install dependencies, including dev tools
+	uv sync
 
-install:  ## Install all dependencies (including dev)
-	uv sync --all-groups
+dev:  ## Run the API with reload (uses .env, SQLite by default)
+	uv run uvicorn src.server:app --reload
 
-dev:  ## Start development server with hot-reload
-	uv run uvicorn src.server:app --reload --host 0.0.0.0 --port 8000
+test:  ## Run the test suite with coverage
+	uv run pytest --cov=src --cov-report=term-missing
 
-test:  ## Run full test suite with coverage
-	uv run pytest tests/ -v --cov=src --cov-report=term-missing
+lint:  ## Lint and check formatting
+	uv run ruff check src tests scripts
+	uv run ruff format --check src tests scripts
 
-test-unit:  ## Run only unit tests (fast, no infrastructure)
-	uv run pytest tests/unit/ -v
+format:  ## Format code
+	uv run ruff format src tests scripts
 
-test-integration:  ## Run only integration tests
-	uv run pytest tests/integration/ -v
+typecheck:  ## Type-check
+	uv run mypy src tests scripts
 
-lint:  ## Run ruff linter
-	uv run ruff check src/ tests/
+check: lint typecheck test  ## Everything CI runs before Docker
 
-format:  ## Auto-format code with ruff
-	uv run ruff format src/ tests/
-
-type-check:  ## Run mypy static type checker
-	uv run mypy src/ --ignore-missing-imports
-
-up:  ## Start PostgreSQL + API via Docker Compose
+up:  ## Start Postgres and the API with Docker Compose
 	docker compose up --build
 
-down:  ## Stop and remove Docker Compose services
-	docker compose down
+down:  ## Stop Docker Compose and delete its volume
+	docker compose down -v
 
-clean:  ## Remove Python cache and coverage artifacts
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	rm -rf .pytest_cache coverage.xml .coverage
+e2e:  ## Run the end-to-end script against the Compose stack, with a restart
+	python3 scripts/e2e.py http://localhost:8000 --restart-cmd "docker compose restart api"
