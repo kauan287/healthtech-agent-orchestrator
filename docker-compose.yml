@@ -1,44 +1,31 @@
-version: "3.9"
-
 services:
-  # ── PostgreSQL ──────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
-    container_name: healthtech_postgres
-    restart: unless-stopped
     environment:
       POSTGRES_USER: healthtech
       POSTGRES_PASSWORD: healthtech
       POSTGRES_DB: healthtech_db
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U healthtech -d healthtech_db"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 10
 
-  # ── API ─────────────────────────────────────────────────────────────────────
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: healthtech_api
-    restart: unless-stopped
+    build: .
     ports:
       - "8000:8000"
     environment:
-      GROQ_API_KEY: ${GROQ_API_KEY}
-      DATABASE_URL: postgresql+psycopg2://healthtech:healthtech@postgres:5432/healthtech_db
-      ENVIRONMENT: production
-      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg://healthtech:healthtech@postgres:5432/healthtech_db
+      LLM_PROVIDER: ${LLM_PROVIDER:-demo}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:-dev-only-audit-signing-key-change-me}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   postgres_data:
-    driver: local

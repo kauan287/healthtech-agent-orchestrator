@@ -1,82 +1,102 @@
+"""Tamper-evident audit chain.
+
+Each entry carries an HMAC-SHA256 over its own content, the prescription it
+belongs to, and the previous entry's MAC. The prescription row stores the last
+entry's MAC as the head, sealed with the same key. Editing, reordering, adding,
+or removing entries, or moving them to another prescription, breaks verification
+for anyone without the key. Details are signed as the exact JSON text stored.
+"""
+
 import hashlib
+import hmac
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple, TypedDict
+
+GENESIS_HASH = "0" * 64
 
 
-def calculate_log_hash(
-    previous_hash: str, step: str, action: str, details: dict[str, Any], timestamp: str
-) -> str:
-    """
-    Calcula un hash SHA-256 único uniendo el hash anterior con la entrada actual.
-    """
-    # Ordenamos el diccionario details para garantizar la consistencia en el hash
-    serialized_details = json.dumps(details, sort_keys=True)
-
-    payload = f"{previous_hash}|{step}|{action}|{serialized_details}|{timestamp}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+class AuditEntry(TypedDict):
+    step: str
+    action: str
+    timestamp: str
+    details: str
+    previous_hash: str
+    hash: str
 
 
-def create_audit_entry(
-    previous_log: dict[str, Any] | None, step: str, action: str, details: dict[str, Any]
-) -> dict[str, Any]:
-    """
-    Crea un registro de auditoría con su hash criptográfico encadenado.
-    """
-    previous_hash = (
-        previous_log["hash"]
-        if previous_log and "hash" in previous_log
-        else "GENESIS_HASH_00000000000000000000000000000000"
+class ChainCheck(NamedTuple):
+    valid: bool
+    detail: str
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _mac(key: bytes, *parts: str) -> str:
+    return hmac.new(key, canonical_json(parts).encode(), hashlib.sha256).hexdigest()
+
+
+def _same(a: str, b: str) -> bool:
+    return hmac.compare_digest(a.encode(), b.encode())
+
+
+def _sign(key: bytes, prescription_id: str, entry: AuditEntry) -> str:
+    return _mac(
+        key,
+        "entry",
+        prescription_id,
+        entry["step"],
+        entry["action"],
+        entry["timestamp"],
+        entry["details"],
+        entry["previous_hash"],
     )
-    timestamp = datetime.now(UTC).isoformat()
 
-    current_hash = calculate_log_hash(
-        previous_hash=previous_hash, step=step, action=action, details=details, timestamp=timestamp
-    )
 
-    return {
+def seal_head(key: bytes, prescription_id: str, head_hash: str) -> str:
+    return _mac(key, "head", prescription_id, head_hash)
+
+
+def new_entry(
+    chain: list[AuditEntry],
+    *,
+    key: bytes,
+    prescription_id: str,
+    step: str,
+    details: dict[str, Any],
+) -> AuditEntry:
+    entry: AuditEntry = {
         "step": step,
-        "action": action,
-        "timestamp": timestamp,
-        "details": details,
-        "previous_hash": previous_hash,
-        "hash": current_hash,
+        "action": f"{step} recorded",
+        "timestamp": datetime.now(UTC).isoformat(),
+        "details": canonical_json(details),
+        "previous_hash": chain[-1]["hash"] if chain else GENESIS_HASH,
+        "hash": "",
     }
+    entry["hash"] = _sign(key, prescription_id, entry)
+    return entry
 
 
-def verify_audit_chain(logs: list[dict[str, Any]]) -> tuple[bool, str]:
-    """
-    Verifica la integridad de toda la cadena de auditoría.
-    Retorna (True, "OK") o (False, "Motivo del fallo").
-    """
-    if not logs:
-        return True, "Cadena vacía"
-
-    for i, log in enumerate(logs):
-        expected_prev_hash = (
-            "GENESIS_HASH_00000000000000000000000000000000" if i == 0 else logs[i - 1]["hash"]
-        )
-
-        # 1. Validar que la referencia al hash anterior sea exacta
-        if log["previous_hash"] != expected_prev_hash:
-            return (
-                False,
-                f"Error de enlace en el registro {i} ({log['step']}): el hash previo no coincide.",
+def verify_chain(
+    chain: list[AuditEntry], *, key: bytes, prescription_id: str, head_hash: str, seal: str
+) -> ChainCheck:
+    if not _same(seal, seal_head(key, prescription_id, head_hash)):
+        return ChainCheck(False, "The sealed chain head was modified.")
+    previous_hash = GENESIS_HASH
+    for index, entry in enumerate(chain):
+        if entry["previous_hash"] != previous_hash:
+            return ChainCheck(
+                False, f"Entry {index} ({entry['step']}) does not link to the entry before it."
             )
-
-        # 2. Recalcular el hash del registro actual para comprobar si fue alterado
-        recalculated_hash = calculate_log_hash(
-            previous_hash=log["previous_hash"],
-            step=log["step"],
-            action=log["action"],
-            details=log["details"],
-            timestamp=log["timestamp"],
-        )
-
-        if log["hash"] != recalculated_hash:
-            return (
-                False,
-                f"⚠️ ¡CORRUPCIÓN DETECTADA! El registro {i} ({log['step']}) ha sido alterado manualmente.",
+        if not _same(entry["hash"], _sign(key, prescription_id, entry)):
+            return ChainCheck(
+                False, f"Entry {index} ({entry['step']}) was modified after it was signed."
             )
-
-    return True, "Cadena de auditoría 100% íntegra y verificada."
+        previous_hash = entry["hash"]
+    if previous_hash != head_hash:
+        return ChainCheck(
+            False, "The chain does not end at the sealed head. Entries were added or removed."
+        )
+    return ChainCheck(True, f"{len(chain)} entries verified.")

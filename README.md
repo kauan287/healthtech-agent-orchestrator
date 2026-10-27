@@ -1,331 +1,227 @@
-# 🏥 HealthTech Agent Orchestrator
+# HealthTech Agent Orchestrator
 
 [![CI](https://github.com/kauan287/healthtech-agent-orchestrator/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/kauan287/healthtech-agent-orchestrator/actions/workflows/ci.yml)
-[![Python 3.12](https://img.shields.io/badge/python-3.12+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.140+-009688.svg?logo=fastapi)](https://fastapi.tiangolo.com)
-[![LangGraph](https://img.shields.io/badge/LangGraph-1.2+-FF6B35.svg)](https://langchain-ai.github.io/langgraph/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg?logo=postgresql&logoColor=white)](https://postgresql.org)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg?logo=python&logoColor=white)](https://www.python.org)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C.svg)](https://langchain-ai.github.io/langgraph/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.140-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Production-grade AI Agent Orchestration backend** for medical prescription workflows.
-> Built with LangGraph, FastAPI, and PostgreSQL — featuring a cryptographic SHA-256 audit chain,
-> Human-in-the-Loop (HITL) interrupts, and full Docker Compose deployment.
+A FastAPI service that reviews prescriptions with two LangGraph agents and a doctor.
+A triage agent proposes a medication, a safety agent checks it against the patient's allergies, and the prescription then waits until a doctor approves or rejects it.
+Every step is written to an audit chain signed with HMAC-SHA256, and every read verifies that chain.
+If someone edits the database by hand, the API withholds the prescription's clinical data and reports `audit_chain_valid: false`, so the companion dispenser refuses to release the medication.
 
----
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D as Doctor or client
+    participant API as FastAPI
+    participant G as LangGraph workflow
+    participant DB as PostgreSQL
+    participant SD as SmartDispenser Core
 
-## 🔗 Part of the MedTech Ecosystem
+    D->>API: POST /api/v1/prescriptions
+    API->>G: invoke()
+    G->>G: triage_agent, then safety_agent
+    G-->>API: 2 signed audit entries
+    API->>DB: row with sealed head + 2 audit entries
+    API-->>D: 201, status PENDING_APPROVAL
 
-This is **Project 1** of a two-project portfolio demonstrating a full end-to-end digital health pipeline.
-A prescription must pass through this AI + HITL system before the companion project physically releases the medication.
+    D->>API: POST /api/v1/prescriptions/{thread_id}/approve
+    API->>DB: verify the chain
+    API->>DB: move the sealed head, add the 3rd signed entry
+    API-->>D: 200, status APPROVED
 
-| Project | Stack | Role |
+    SD->>API: GET /api/v1/prescriptions/{thread_id}
+    API->>DB: load the chain, verify signatures and the sealed head
+    API-->>SD: human_approved, safety_approved, audit_chain_valid
+```
+
+## Part of a two-service MedTech demo
+
+This repository is one half of an end-to-end prescription pipeline.
+[SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) runs the medication vending machines.
+It calls `GET /api/v1/prescriptions/session-{prescription_id}` on this service and dispenses only when the doctor approved, the safety agent passed, and the audit chain verifies.
+
+| Service | Stack | Responsibility |
 |---|---|---|
-| **HealthTech Agent Orchestrator** *(this repo)* | Python · FastAPI · LangGraph · PostgreSQL | AI triage, safety checks, doctor approval, cryptographic audit |
-| **[SmartDispenser Core](https://github.com/kauan287/smartdispenser-core)** [![CI](https://github.com/kauan287/smartdispenser-core/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/kauan287/smartdispenser-core/actions/workflows/ci.yml) | C# · ASP.NET Core 10 · SignalR · Blazor | Real-time hardware control, payment webhooks, live dashboard |
+| HealthTech Agent Orchestrator (this repository) | Python, FastAPI, LangGraph, PostgreSQL | AI triage, allergy check, doctor sign-off, signed audit trail |
+| [SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) | C#, ASP.NET Core, SignalR, Blazor | Payment webhooks, machine control, live dashboard |
 
-```
-┌──────────────────────────────────────┐     ┌──────────────────────────────────────┐
-│  HealthTech Agent Orchestrator       │     │  SmartDispenser Core                 │
-│  (this repo)                         │────▶│  github.com/kauan287/smartdispenser  │
-│                                      │     │                                      │
-│  1. Doctor submits prescription      │     │  5. Verify approval + audit chain ✓  │
-│  2. Triage Agent classifies          │     │  6. Validate HMAC payment webhook ✓  │
-│  3. Safety Agent checks allergies    │     │  7. Send SignalR command to machine  │
-│  4. Doctor approves (HITL) ✓        │     │  8. Blazor dashboard updates live    │
-│     SHA-256 audit chain signed       │     │                                      │
-└──────────────────────────────────────┘     └──────────────────────────────────────┘
-```
+`tests/test_api.py::test_response_keeps_the_fields_smartdispenser_reads` pins the fields that SmartDispenser deserializes.
+New fields are safe to add. Renaming or removing one breaks the dispenser.
 
-📦 **[SmartDispenser Core → github.com/kauan287/smartdispenser-core](https://github.com/kauan287/smartdispenser-core)**
+## Run it
 
----
-
-
-## 🏗️ Architecture
-
-The system runs a two-stage LangGraph multi-agent pipeline. Each step is recorded in a **blockchain-style hash chain** — making any retroactive data manipulation detectable at the application level.
-
-```
-POST /api/v1/prescriptions
-         │
-         ▼
- ┌───────────────┐     SHA-256 log      ┌──────────────────┐
- │  Triage Agent │ ──────────────────►  │  Cryptographic   │
- │  (LLM: Groq)  │  proposes medication │  Audit Chain     │
- └───────┬───────┘                      │                  │
-         │                              │  entry[0].hash   │
-         ▼                              │       ↕           │
- ┌───────────────┐     SHA-256 log      │  entry[1].hash   │
- │ Safety Agent  │ ──────────────────►  │       ↕           │
- │  (LLM: Groq)  │  validates allergies │  entry[2].hash   │
- └───────┬───────┘                      └──────────────────┘
-         │
-         ▼  ← HITL INTERRUPT (graph pauses here)
-         │
-POST /api/v1/prescriptions/{id}/approve
-         │
-         ▼
- ┌───────────────┐
- │ Doctor signs  │
- │ off decision  │
- └───────┬───────┘
-         │
-         ▼
- ┌───────────────────────────────────┐
- │  PostgreSQL  (Docker Compose)     │
- │  • prescriptions table            │
- │  • audit_logs table (immutable)   │
- └───────────────────────────────────┘
-```
-
----
-
-## ✨ Key Features
-
-| Feature | Details |
-|---|---|
-| **Multi-Agent Pipeline** | LangGraph `StateGraph` with Triage + Safety agents and structured Pydantic outputs |
-| **Human-in-the-Loop** | Graph `interrupt_after` pattern — mandatory doctor sign-off before finalization |
-| **Cryptographic Audit Chain** | SHA-256 chained logs, blockchain-inspired; tamper detection even if DB is compromised |
-| **PostgreSQL Persistence** | SQLAlchemy 2.x ORM; `prescriptions` + `audit_logs` tables; Repository pattern |
-| **Docker Compose** | One-command local setup: `docker compose up --build` |
-| **CI/CD Pipeline** | GitHub Actions: lint (ruff + mypy) → pytest with coverage → Docker smoke test |
-| **Test Suite** | Unit tests (mocked LLM) + Integration tests (FastAPI TestClient + SQLite) |
-| **Graceful Degradation** | DB unavailable? API returns correct responses; writes fail silently with a warning |
-
----
-
-## 🛠️ Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Agent Orchestration | [LangGraph](https://langchain-ai.github.io/langgraph/) 1.2+ |
-| LLM Provider | [Groq](https://groq.com/) (`llama-3.3-70b-versatile`) |
-| API Framework | [FastAPI](https://fastapi.tiangolo.com/) 0.140+ |
-| Database ORM | [SQLAlchemy](https://sqlalchemy.org/) 2.0 |
-| Database | PostgreSQL 16 (psycopg2) |
-| Package Manager | [uv](https://docs.astral.sh/uv/) |
-| Linter / Formatter | [ruff](https://docs.astral.sh/ruff/) |
-| Type Checker | mypy |
-| Test Framework | pytest + httpx |
-| Containerization | Docker + Docker Compose |
-| CI/CD | GitHub Actions |
-
----
-
-## 🚀 Quick Start
-
-### Option 1: Docker Compose *(recommended)*
+You need Docker. If you ran an earlier version, delete its database volume first with `docker compose down -v`, because the schema changed and `create_all` does not migrate it.
+No API key is required: by default the stack uses `LLM_PROVIDER=demo`, a deterministic rule table that stands in for the LLM.
 
 ```bash
 git clone https://github.com/kauan287/healthtech-agent-orchestrator.git
 cd healthtech-agent-orchestrator
-
-cp .env.example .env
-# Edit .env — add your GROQ_API_KEY (free at https://console.groq.com/keys)
-
 docker compose up --build
 ```
 
-- **API:** http://localhost:8000
-- **Interactive Docs:** http://localhost:8000/docs
-- **PostgreSQL:** `localhost:5432` (user: `healthtech`, db: `healthtech_db`)
+The API listens on http://localhost:8000, with interactive docs at http://localhost:8000/docs.
 
-### Option 2: Local Development (uv)
+Create a prescription. The agents run and the workflow pauses for the doctor:
 
 ```bash
-git clone https://github.com/kauan287/healthtech-agent-orchestrator.git
-cd healthtech-agent-orchestrator
-
-# Install all deps including dev tooling
-uv sync --all-groups
-
-cp .env.example .env
-# Edit .env — add GROQ_API_KEY (PostgreSQL is optional; API degrades gracefully)
-
-uv run uvicorn src.server:app --reload
+curl -s -X POST localhost:8000/api/v1/prescriptions \
+	-H 'Content-Type: application/json' \
+	-d '{"prescription_id": "RX-001", "patient_symptoms": "Fiebre de 39 °C y dolor articular", "patient_allergies": ["Ibuprofeno"]}'
 ```
 
----
-
-## 📡 API Reference
-
-Full interactive docs available at `/docs` when the server is running.
-
-### `POST /api/v1/prescriptions` — Start AI evaluation
-
-```bash
-curl -X POST http://localhost:8000/api/v1/prescriptions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prescription_id": "RX-2024-001",
-    "patient_symptoms": "Fiebre alta de 39°C y dolor articular",
-    "patient_allergies": ["Ibuprofeno"]
-  }'
-```
-
-Response — graph is paused awaiting doctor approval:
 ```json
 {
-  "thread_id": "session-RX-2024-001",
-  "prescription_id": "RX-2024-001",
+  "thread_id": "session-RX-001",
+  "prescription_id": "RX-001",
+  "status": "PENDING_APPROVAL",
   "proposed_medication": "Paracetamol",
-  "dosage": "500mg cada 8 horas",
+  "dosage": "500 mg cada 8 horas",
   "safety_approved": true,
-  "risk_notes": "Sin conflictos con alergias conocidas.",
+  "risk_notes": "Sin conflictos con las alergias conocidas.",
   "human_approved": null,
+  "doctor_comments": null,
   "is_paused_waiting_approval": true,
   "audit_chain_valid": true
 }
 ```
 
-### `GET /api/v1/prescriptions/{thread_id}` — Get session status
+Record the doctor's decision, then read the signed audit trail:
 
 ```bash
-curl http://localhost:8000/api/v1/prescriptions/session-RX-2024-001
+curl -s -X POST localhost:8000/api/v1/prescriptions/session-RX-001/approve \
+	-H 'Content-Type: application/json' \
+	-d '{"approved": true, "doctor_comments": "Paracetamol adecuado."}'
+
+curl -s localhost:8000/api/v1/prescriptions/session-RX-001/audit
 ```
 
-### `POST /api/v1/prescriptions/{thread_id}/approve` — Doctor decision
+To see the tamper check work, change a stored entry and read the prescription again:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/prescriptions/session-RX-2024-001/approve \
-  -H "Content-Type: application/json" \
-  -d '{
-    "approved": true,
-    "doctor_comments": "Paciente alérgico al ibuprofeno confirmado. Paracetamol adecuado."
-  }'
+docker compose exec postgres psql -U healthtech -d healthtech_db -c \
+	"UPDATE audit_logs SET details = replace(details, 'Paracetamol', 'Morfina')"
+
+curl -s localhost:8000/api/v1/prescriptions/session-RX-001/audit
+# {"valid": false, "detail": "Entry 0 (TRIAGE_AGENT) was modified after it was signed.", ...}
+
+curl -s localhost:8000/api/v1/prescriptions/session-RX-001
+# "status": "INVALID", "audit_chain_valid": false, and every clinical field is null
 ```
 
-### `GET /health` — Liveness probe
+To use real LLM agents, get a free key at https://console.groq.com/keys and start the stack with it:
 
 ```bash
-curl http://localhost:8000/health
-# {"status": "ok", "version": "1.0.0", "environment": "development"}
+LLM_PROVIDER=groq GROQ_API_KEY=gsk_... docker compose up --build
 ```
 
----
-
-## 🧪 Testing
+### Run it without Docker
 
 ```bash
-# Install dev dependencies
-uv sync --all-groups
-
-# Run full suite with coverage report
-uv run pytest tests/ -v --cov=src --cov-report=term-missing
-
-# Run only unit tests (fast — no network, no DB)
-uv run pytest tests/unit/ -v
-
-# Run only integration tests
-uv run pytest tests/integration/ -v
-
-# Lint
-uv run ruff check src/ tests/
-
-# Format
-uv run ruff format src/ tests/
-
-# Type check
-uv run mypy src/ --ignore-missing-imports
+uv sync
+cp .env.example .env
+uv run uvicorn src.server:app --reload
 ```
 
-> **No infrastructure needed for tests.** LLM calls are mocked via `unittest.mock.patch`.
-> The DB dependency is overridden with an in-memory SQLite session — no Postgres required.
+Local runs use SQLite (`healthtech.db`). Without a `.env` file the app starts in production mode and refuses to run on the development signing key.
 
----
+## API
 
-## 📁 Project Structure
+| Method and path | Result |
+|---|---|
+| `POST /api/v1/prescriptions` | Runs both agents and pauses for the doctor. Returns 201, or 409 if the `prescription_id` exists. |
+| `GET /api/v1/prescriptions/{thread_id}` | The prescription, read from the verified audit chain. Returns 404 if unknown. |
+| `POST /api/v1/prescriptions/{thread_id}/approve` | Records `{"approved": bool, "doctor_comments": str}`. Returns 409 if a decision exists or the audit chain is invalid. |
+| `GET /api/v1/prescriptions/{thread_id}/audit` | Every stored audit entry plus the verification result. If the chain is invalid, each `details` is null. |
+| `GET /health` | Liveness. Touches nothing. |
+| `GET /health/ready` | Readiness. Runs `SELECT 1` on the database. |
+
+`thread_id` is always `session-{prescription_id}`. A `prescription_id` may contain letters, digits, `.`, `_`, and `-`.
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_PROVIDER` | `groq` (`demo` in `.env.example` and Compose) | `groq` calls the LLM. `demo` uses the rule table in `src/clinical.py`. |
+| `GROQ_API_KEY` | empty | Required when `LLM_PROVIDER=groq`. The app refuses to start without it. |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Any Groq chat model with tool calling. |
+| `DATABASE_URL` | `sqlite:///./healthtech.db` | `sqlite:///...` or `postgresql+psycopg://...` |
+| `AUDIT_SIGNING_KEY` | a development key | Signs the audit chain. With `ENVIRONMENT=production`, the app refuses to start on the development key or on a key shorter than 32 characters. |
+| `ENVIRONMENT` | `production` (`development` in `.env.example` and Compose) | `development`, `test`, or `production`. |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
+
+## How the audit chain works
+
+Each audit entry stores its step, action, timestamp, details, and the MAC of the entry before it.
+The entry's own MAC is HMAC-SHA256 over that content plus the `prescription_id`.
+The `details` column holds the exact canonical JSON text that the MAC signs, so a malformed value fails verification like any other edit.
+The `prescriptions` row stores the last entry's MAC as `head_hash`, with a `seal` that is an HMAC of the head.
+`src/audit.py` holds the whole mechanism in under 100 lines.
+
+`verify_chain` walks the entries in order and checks each link and each MAC.
+The tests in `tests/test_audit.py` and `tests/test_api.py` prove that it catches these changes:
+
+- An edited field in any entry.
+- A chain rebuilt by someone who does not hold the key.
+- An entry deleted from the middle or the end, or entries in a different order.
+- A head rewound to an earlier entry with a seal that the attacker computed or guessed.
+- A chain copied from another prescription.
+
+The API never trusts a table column for a clinical fact.
+`read_prescription` in `src/prescription.py` verifies the chain and checks that its steps are triage, safety, and at most one doctor decision. Only then does it read the proposal, the safety verdict, and the decision from the signed entries.
+If any check fails, the response has status `INVALID`, every clinical field is null, and `safety_approved` is false. A reader cannot act on forged data even if it ignores `audit_chain_valid`.
+Deleting the doctor's entry reads as `INVALID`, and the API refuses a new decision on an invalid chain. The one exception is the replay of a saved seal, described below.
+A decision is a compare-and-swap on `head_hash`. Of two concurrent decisions, exactly one moves the head, on Postgres and on SQLite, and the other gets 409.
+`PrescriptionRepository.snapshot` reads the head before and after the chain, so a reader never pairs the chain from one commit with the head from another and reports a healthy prescription as tampered.
+
+The chain cannot help in three cases. They hold for any MAC whose key the application must keep.
+Someone who holds `AUDIT_SIGNING_KEY` can forge entries, so keep the key in a secret manager and out of the database. Entries carry no key id, so rotating the key invalidates every existing chain.
+Someone with write access who saved an earlier `head_hash` and `seal` pair, by reading the row before the decision or from a backup, can delete the later entries and put the old pair back. The prescription then verifies as pending again, and a new decision is possible. A seal stored in the same database cannot prevent that. Detecting it needs an anchor outside the database, such as a write-once log, or a database role for the app that cannot delete from `audit_logs`.
+Someone who can call the API can approve prescriptions, because the API has no authentication. A production deployment needs an identity provider in front of it, and the doctor's identity belongs in the signed decision.
+
+## Design decisions
+
+**The database is the system of record.** Each write runs in a short database transaction, the unique `prescription_id` rejects duplicates, and no write error is swallowed. A response never comes from in-memory graph state or from an unsigned column.
+
+**The doctor step is a guarded write, not a paused graph.** LangGraph can pause a run with `interrupt()` and keep it in a durable checkpointer until the doctor answers. An earlier draft of this service did that, and two independent reviews measured the cost. The checkpoint became a second, unsigned copy of the audit chain. A failed create left stale entries that a retry signed into a valid chain. A lost checkpoint left a prescription that could never be decided. A deleted decision came back on the next request. A pending prescription holds nothing that the database lacks, so the pipeline runs triage and safety in one `invoke()` with no checkpointer. The approve endpoint verifies the chain, then appends the signed decision with a conditional `UPDATE` that moves `head_hash` only if nobody moved it first. The same sealed head that detects a truncated chain is the lock for concurrent decisions, so the table needs no status column.
+
+**Sync endpoints.** LangGraph's sync API runs inside FastAPI's thread pool. Async endpoints would need an async database driver and add nothing at this scale. No database transaction stays open while the agents call the LLM. The create endpoint holds a worker thread while both agents call the LLM, so throughput scales with Uvicorn workers.
+
+**A demo model instead of mocks.** `DemoClinicalModel` implements the same `ClinicalModel` protocol as `GroqClinicalModel`. The tests, the CI end-to-end job, and `docker compose up` all run the real workflow with it, and none of them needs a key. Its rule table is a placeholder, not medical logic.
+
+**Known limits.** The app creates tables with `create_all` at startup, not with migrations. Several Uvicorn workers that start together on an empty database can race to create them. SQLite allows one writer at a time, so use it only for local work. CI does not call Groq, because that needs an API key. The Groq prompts in `src/clinical.py` run only when you supply one.
+
+## Development
+
+```bash
+make check   # ruff, mypy --strict on src, tests, and scripts, pytest with coverage
+make up      # Postgres and the API in Docker Compose
+make e2e     # scripts/e2e.py against the Compose stack, with an API restart
+```
+
+CI (`.github/workflows/ci.yml`) runs two jobs on every pull request and every push to `master`:
+
+1. `check` runs lint, format, type checks, and the test suite.
+2. `e2e` starts Postgres and the API with Docker Compose, runs `scripts/e2e.py` with a restart in the middle, then edits an audit row with `psql` and asserts that the API returns status `INVALID` with no clinical data.
+
+## Project layout
 
 ```
-healthtech-agent-orchestrator/
-├── src/
-│   ├── agents.py           # Triage + Safety LangGraph nodes
-│   ├── api_schemas.py      # FastAPI request/response models
-│   ├── audit.py            # SHA-256 cryptographic audit chain
-│   ├── config.py           # Pydantic Settings (env-aware, cached)
-│   ├── graph.py            # LangGraph StateGraph definition
-│   ├── schemas.py          # LLM structured output schemas (Pydantic)
-│   ├── server.py           # FastAPI application + dependency injection
-│   ├── state.py            # LangGraph TypedDict state definition
-│   └── db/
-│       ├── models.py       # SQLAlchemy 2.x ORM models
-│       ├── repository.py   # Repository pattern (data access layer)
-│       └── session.py      # DB engine + session factory
-├── tests/
-│   ├── conftest.py         # Shared fixtures (mock LLM, SQLite override)
-│   ├── unit/
-│   │   ├── test_audit.py   # Audit chain: hash chaining, tamper detection
-│   │   ├── test_graph.py   # LangGraph: node wiring, interrupt, resume
-│   │   └── test_schemas.py # Pydantic schema validation
-│   └── integration/
-│       └── test_api.py     # Full HTTP lifecycle (TestClient + SQLite)
-├── .github/
-│   └── workflows/
-│       └── ci.yml          # CI: lint → test (with coverage) → docker build
-├── docker-compose.yml      # PostgreSQL 16 + API service
-├── Dockerfile              # Multi-stage build (Python 3.12-slim)
-├── Makefile                # Developer convenience targets
-├── pyproject.toml          # Project metadata + ruff/mypy/pytest config
-└── README.md
+src/
+├── server.py        FastAPI app, endpoints, and the response projection
+├── graph.py         LangGraph pipeline: triage_agent, then safety_agent
+├── clinical.py      ClinicalModel protocol, Groq and demo implementations
+├── audit.py         HMAC-signed audit chain: new_entry, seal_head, verify_chain
+├── prescription.py  read_prescription: from a verified chain to the read model
+├── db.py            SQLAlchemy models and PrescriptionRepository
+├── api_schemas.py   Request and response models
+└── config.py        Settings and startup validation
+tests/               pytest suite, runs the real app on a temporary SQLite database
+scripts/e2e.py       HTTP end-to-end check, standard library only
 ```
 
----
+## License
 
-## ⚖️ Trade-offs & Technical Decisions
-
-### 1. Blockchain-style Hash Chain vs. Append-only DB Table
-
-**Decision:** Every audit log entry contains a SHA-256 hash computed from its own content *plus* the previous entry's hash — forming a tamper-evident chain.
-
-**Why:** Standard append-only tables with DB-level restrictions (`INSERT ONLY`) prevent easy deletions but cannot detect **retroactive field-level modifications** — e.g., a DBA changing `proposed_medication` from "Paracetamol" to "Morfina" directly in the database. The hash chain makes this detectable at the application level on the next `verify_audit_chain()` call, even years later.
-
-**Trade-off:** Hash computation is sequential (each entry depends on the previous) and cannot be parallelized. For high-throughput systems this is a bottleneck. The production-grade alternative would be a dedicated immutable ledger service (e.g., AWS QLDB or Azure Confidential Ledger) that provides hardware-attested write-once guarantees without the sequential constraint.
-
----
-
-### 2. LangGraph `MemorySaver` vs. `AsyncpgSaver` for HITL State
-
-**Decision:** The LangGraph graph uses `MemorySaver` (in-process dict) to hold session state between the HITL interrupt and the doctor's approval.
-
-**Why:** `MemorySaver` is zero-dependency, works in any environment, and makes unit testing trivial (no DB or network). For a single-instance deployment it is functionally correct.
-
-**Trade-off:** State is **lost on server restart**, and **horizontal scaling is impossible** — each API instance has its own memory. `langgraph-checkpoint-postgres` (`AsyncpgSaver`) solves both: state is stored in the same PostgreSQL instance already provided by `docker-compose.yml`, and any replica can resume any session. This is the planned production upgrade; the migration requires changing one line in `graph.py`.
-
-**Why not now:** `AsyncpgSaver` requires async SQLAlchemy throughout the entire request chain, which conflicts with LangGraph's current synchronous `.stream()` API. The migration is non-trivial and would obscure the core orchestration logic for a portfolio demo.
-
----
-
-### 3. Synchronous FastAPI Endpoints
-
-**Decision:** All endpoints are `def` (sync), not `async def`, despite FastAPI's native async support.
-
-**Why:** LangGraph's `.stream()` and `.update_state()` are synchronous APIs. Wrapping them inside `async def` endpoints would require `asyncio.to_thread()` (or `run_in_executor`), adding complexity and potential deadlock risk with no concurrency benefit at single-instance scale.
-
-**Trade-off:** Each synchronous endpoint blocks a Uvicorn worker thread for the duration of LLM inference (typically 2–8 seconds with Groq). With `uvicorn --workers N` this scales linearly with N. For production-grade concurrency under real load: migrate to `async def` + `asyncio.to_thread(orchestrator_app.stream, ...)`.
-
----
-
-### 4. HITL as Graph Interrupt vs. Webhook / Callback Pattern
-
-**Decision:** Doctor approval uses LangGraph's `interrupt_after` mechanism — the graph suspends mid-execution and resumes when `update_state` is called.
-
-**Why:** All workflow state stays inside the graph; transitions are explicit and visible in the state object. No external event bus, message queue, or callback URL management is required. The API surface is simple: one endpoint to create, one to approve.
-
-**Trade-off:** The "paused" state lives in `MemorySaver`. A server restart between prescription creation and doctor approval **loses the session** (mitigated by migrating to `AsyncpgSaver` as above). A webhook-based approach — return an `approval_token` immediately, persist to DB, notify doctor via email/push, accept callback on a separate route — is more resilient for long waits (hours, days) but significantly more complex. For the clinical use case, the webhook approach is likely the right long-term design.
-
----
-
-### 5. Single LLM for Both Agents vs. Specialized Models per Role
-
-**Decision:** Both the Triage Agent and the Safety Agent use the same `llama-3.3-70b-versatile` model on Groq's free tier.
-
-**Why:** The primary differentiator of this system is the **orchestration pattern** (multi-agent graph, HITL, cryptographic audit), not the model selection. Using Pydantic structured outputs (`with_structured_output`) adds a schema-level safety net against hallucinated formats regardless of which model is used.
-
-**Trade-off:** A medically fine-tuned model (trained on clinical decision support datasets, e.g., [MedPaLM](https://sites.research.google/med-palm/)) would produce significantly more accurate triage proposals. The architecture is deliberately model-agnostic — swapping `ChatGroq` for any `langchain_core.language_models.BaseChatModel` requires changing **one line** in `agents.py`.
-
----
-
-## 📄 License
-
-MIT — see [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
