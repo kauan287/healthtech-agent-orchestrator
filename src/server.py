@@ -1,282 +1,263 @@
-"""
-FastAPI application — entry point for the HealthTech Agent Orchestrator API.
+"""FastAPI application for the HealthTech Agent Orchestrator.
 
-Key design decisions:
-  - Endpoints are synchronous (sync def) to avoid thread-pool complexity when
-    wrapping LangGraph's synchronous .stream() / .update_state() APIs.
-  - DB writes are non-blocking failures: if Postgres is unavailable the API
-    still returns a correct response (degraded-but-functional mode).
-  - The /health endpoint is dependency-free and always returns quickly.
+The database is the system of record, and every clinical fact in a response is
+read from the signed audit chain stored there. Endpoints are sync because the
+LangGraph pipeline is called through its sync API. FastAPI runs them in a thread pool.
 """
 
+import json
 import logging
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.api_schemas import (
+    AuditEntryResponse,
+    AuditTrailResponse,
     CreatePrescriptionRequest,
     DoctorApprovalRequest,
     PrescriptionResponse,
 )
-from src.audit import create_audit_entry, verify_audit_chain
-from src.config import get_settings
-from src.db.models import Base
-from src.db.repository import AuditLogRepository, PrescriptionRepository
-from src.db.session import engine, get_db_session
-from src.graph import create_app
-from src.state import PrescriptionState
+from src.audit import new_entry, seal_head
+from src.clinical import build_clinical_model
+from src.config import Settings, get_settings
+from src.db import Base, PrescriptionRepository, StoredChain
+from src.graph import Pipeline, build_pipeline
+from src.prescription import DoctorDecision, Prescription, Status, Step, read_prescription
+
+VERSION = "1.1.0"
+THREAD_PREFIX = "session-"
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
-
-# ── LangGraph singleton ────────────────────────────────────────────────────────
-# Created once at startup.  Each request is isolated by its unique thread_id.
-orchestrator_app = create_app(interrupt_after=["safety_agent"])
+router = APIRouter()
 
 
-# ── Lifespan ───────────────────────────────────────────────────────────────────
-@asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: ARG001
-    """Run DB migrations on startup; clean up on shutdown."""
-    try:
-        Base.metadata.create_all(bind=engine)
-        logger.info("✅ Database tables created/verified.")
-    except Exception as exc:
-        # Postgres may not be available in dev/test — degrade gracefully.
-        logger.warning("⚠️  Could not connect to database: %s. Running without persistence.", exc)
-    yield
-    logger.info("Shutting down HealthTech API.")
-
-
-# ── Application ────────────────────────────────────────────────────────────────
-app = FastAPI(
-    title="HealthTech Agent Orchestrator API",
-    description=(
-        "Production-grade backend for AI-driven medical prescription workflows. "
-        "Features: LangGraph multi-agent pipeline, Human-in-the-Loop (HITL) interrupts, "
-        "cryptographic SHA-256 audit chain, and PostgreSQL persistence."
-    ),
-    version=settings.APP_VERSION,
-    lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
-
-# ── Dependency: DB session ─────────────────────────────────────────────────────
-def get_db() -> Generator[Session, None, None]:
-    """
-    FastAPI dependency that yields a transactional DB session.
-
-    Override in tests via app.dependency_overrides[get_db] = ...
-    """
-    with get_db_session() as session:
-        yield session
-
-
-# ── Health ─────────────────────────────────────────────────────────────────────
-@app.get("/health", tags=["Ops"])
-def health_check():
-    """Lightweight liveness probe — no DB or LLM calls."""
-    return {
-        "status": "ok",
-        "version": settings.APP_VERSION,
-        "environment": settings.ENVIRONMENT,
-    }
-
-
-# ── Prescriptions ──────────────────────────────────────────────────────────────
-@app.post(
-    "/api/v1/prescriptions",
-    response_model=PrescriptionResponse,
-    status_code=200,
-    tags=["Prescriptions"],
-    summary="Start AI evaluation pipeline",
-)
-def start_prescription_flow(
-    req: CreatePrescriptionRequest,
-    db: Session = Depends(get_db),
-):
-    """
-    Run the Triage + Safety agents, then pause for mandatory doctor approval.
-
-    Returns immediately with `is_paused_waiting_approval: true`.
-    Use POST /api/v1/prescriptions/{thread_id}/approve to resume.
-    """
-    thread_id = f"session-{req.prescription_id}"
-    config = {"configurable": {"thread_id": thread_id}}
-
-    initial_input: PrescriptionState = {
-        "prescription_id": req.prescription_id,
-        "patient_symptoms": req.patient_symptoms,
-        "patient_allergies": req.patient_allergies,
-        "proposed_medication": None,
-        "dosage": None,
-        "safety_approved": False,
-        "risk_notes": None,
-        "human_approved": None,
-        "doctor_comments": None,
-        "audit_logs": [],
-    }
-
-    # Run agents until the HITL interrupt fires
-    for _ in orchestrator_app.stream(initial_input, config):
-        pass
-
-    state_values = orchestrator_app.get_state(config).values
-    audit_valid, _ = verify_audit_chain(state_values.get("audit_logs", []))
-
-    # ── Persist to DB (non-blocking failure) ──────────────────────────────────
-    try:
-        prescription_repo = PrescriptionRepository(db)
-        audit_repo = AuditLogRepository(db)
-
-        prescription_repo.create(
-            prescription_id=req.prescription_id,
-            thread_id=thread_id,
-            patient_symptoms=req.patient_symptoms,
-            patient_allergies=req.patient_allergies,
+def create_api(settings: Settings | None = None) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        resolved = settings or get_settings()
+        logging.basicConfig(level=resolved.LOG_LEVEL)
+        engine = create_engine(resolved.DATABASE_URL, pool_pre_ping=True)
+        Base.metadata.create_all(engine)
+        key = resolved.AUDIT_SIGNING_KEY.encode()
+        app.state.signing_key = key
+        app.state.sessions = sessionmaker(engine, expire_on_commit=False)
+        app.state.pipeline = build_pipeline(build_clinical_model(resolved), key)
+        logger.info(
+            "Ready: llm=%s, database=%s", resolved.LLM_PROVIDER, engine.url.get_backend_name()
         )
-        prescription_repo.update_after_agents(
-            prescription_id=req.prescription_id,
-            proposed_medication=state_values.get("proposed_medication") or "",
-            dosage=state_values.get("dosage") or "",
-            safety_approved=state_values.get("safety_approved", False),
-            risk_notes=state_values.get("risk_notes") or "",
-        )
-        audit_repo.bulk_create(req.prescription_id, state_values.get("audit_logs", []))
-        logger.info("Prescription %s persisted to DB.", req.prescription_id)
-    except Exception as exc:
-        logger.warning("DB persistence failed (non-blocking): %s", exc)
+        yield
+        engine.dispose()
 
-    return PrescriptionResponse(
-        thread_id=thread_id,
-        prescription_id=state_values["prescription_id"],
-        proposed_medication=state_values.get("proposed_medication"),
-        dosage=state_values.get("dosage"),
-        safety_approved=state_values.get("safety_approved", False),
-        risk_notes=state_values.get("risk_notes"),
-        human_approved=state_values.get("human_approved"),
-        doctor_comments=state_values.get("doctor_comments"),
-        is_paused_waiting_approval=True,
-        audit_chain_valid=audit_valid,
+    app = FastAPI(
+        title="HealthTech Agent Orchestrator API",
+        description=(
+            "Multi-agent prescription review with LangGraph. A triage agent proposes a "
+            "medication, a safety agent checks allergies, and a doctor approves or rejects. "
+            "Every step is recorded in an HMAC-signed audit chain."
+        ),
+        version=VERSION,
+        lifespan=lifespan,
+    )
+    app.include_router(router)
+    app.add_exception_handler(RequestValidationError, _validation_error)
+    return app
+
+
+async def _validation_error(request: Request, exc: Exception) -> Response:
+    # The default handler echoes the input as UTF-8, which fails on a lone surrogate.
+    errors = exc.errors() if isinstance(exc, RequestValidationError) else []
+    body = json.dumps({"detail": jsonable_encoder(errors)}, ensure_ascii=True)
+    return Response(body, status_code=422, media_type="application/json")
+
+
+def _repo(request: Request) -> Iterator[PrescriptionRepository]:
+    session: Session
+    with request.app.state.sessions() as session:
+        yield PrescriptionRepository(session)
+
+
+def _pipeline(request: Request) -> Pipeline:
+    pipeline: Pipeline = request.app.state.pipeline
+    return pipeline
+
+
+def _signing_key(request: Request) -> bytes:
+    key: bytes = request.app.state.signing_key
+    return key
+
+
+def _prescription_id(thread_id: str) -> str:
+    if not thread_id.startswith(THREAD_PREFIX):
+        raise HTTPException(404, "Prescription not found.")
+    return thread_id.removeprefix(THREAD_PREFIX)
+
+
+Repo = Annotated[PrescriptionRepository, Depends(_repo)]
+SigningKey = Annotated[bytes, Depends(_signing_key)]
+
+
+def _stored(repo: PrescriptionRepository, prescription_id: str) -> StoredChain:
+    stored = repo.snapshot(prescription_id)
+    if stored is None:
+        raise HTTPException(404, "Prescription not found.")
+    return stored
+
+
+def _read(stored: StoredChain, prescription_id: str, key: bytes) -> Prescription:
+    return read_prescription(
+        stored.chain,
+        key=key,
+        prescription_id=prescription_id,
+        head_hash=stored.head_hash,
+        seal=stored.seal,
     )
 
 
-@app.get(
+def _response(prescription_id: str, rx: Prescription) -> PrescriptionResponse:
+    return PrescriptionResponse(
+        thread_id=THREAD_PREFIX + prescription_id,
+        prescription_id=prescription_id,
+        status=rx.status,
+        proposed_medication=rx.triage.proposed_medication if rx.triage else None,
+        dosage=rx.triage.dosage if rx.triage else None,
+        safety_approved=rx.safety.is_safe if rx.safety else False,
+        risk_notes=rx.safety.risk_notes if rx.safety else None,
+        human_approved=rx.decision.approved if rx.decision else None,
+        doctor_comments=rx.decision.comments if rx.decision else None,
+        is_paused_waiting_approval=rx.status is Status.PENDING_APPROVAL,
+        audit_chain_valid=rx.audit_valid,
+    )
+
+
+@router.get("/health", tags=["Ops"])
+def health() -> dict[str, str]:
+    return {"status": "ok", "version": VERSION}
+
+
+@router.get("/health/ready", tags=["Ops"])
+def ready(repo: Repo) -> dict[str, str]:
+    repo.session.execute(text("SELECT 1"))
+    return {"status": "ready"}
+
+
+@router.post(
+    "/api/v1/prescriptions",
+    response_model=PrescriptionResponse,
+    status_code=201,
+    tags=["Prescriptions"],
+    summary="Run the triage and safety agents, then wait for the doctor",
+    responses={409: {"description": "A prescription with this id already exists."}},
+)
+def create_prescription(
+    req: CreatePrescriptionRequest,
+    repo: Repo,
+    pipeline: Annotated[Pipeline, Depends(_pipeline)],
+    key: SigningKey,
+) -> PrescriptionResponse:
+    conflict = HTTPException(409, f"Prescription {req.prescription_id} already exists.")
+    with repo.session.begin():
+        if repo.head(req.prescription_id) is not None:
+            raise conflict
+
+    chain = pipeline.invoke(
+        {
+            "prescription_id": req.prescription_id,
+            "patient_symptoms": req.patient_symptoms,
+            "patient_allergies": req.patient_allergies,
+        }
+    )["audit_logs"]
+
+    try:
+        with repo.session.begin():
+            seal = seal_head(key, req.prescription_id, chain[-1]["hash"])
+            repo.add(req.prescription_id, chain, seal)
+            stored = _stored(repo, req.prescription_id)
+            return _response(req.prescription_id, _read(stored, req.prescription_id, key))
+    except IntegrityError:
+        if repo.head(req.prescription_id) is not None:
+            raise conflict from None
+        raise
+
+
+@router.get(
     "/api/v1/prescriptions/{thread_id}",
     response_model=PrescriptionResponse,
     tags=["Prescriptions"],
-    summary="Get prescription session status",
+    summary="Read a prescription, verified against its audit chain",
 )
-def get_prescription_status(thread_id: str):
-    """
-    Retrieve the current LangGraph state for a session.
-
-    `is_paused_waiting_approval` is True while awaiting doctor sign-off.
-    """
-    config = {"configurable": {"thread_id": thread_id}}
-    state = orchestrator_app.get_state(config)
-
-    if not state.values:
-        raise HTTPException(status_code=404, detail="Session not found.")
-
-    state_values = state.values
-    audit_valid, _ = verify_audit_chain(state_values.get("audit_logs", []))
-    # Semantic HITL check: the graph is awaiting a doctor decision when
-    # human_approved has not yet been set. This is robust across LangGraph
-    # versions, which differ in how they signal interrupts via state.next/tasks.
-    is_paused = state_values.get("human_approved") is None
-
-    return PrescriptionResponse(
-        thread_id=thread_id,
-        prescription_id=state_values["prescription_id"],
-        proposed_medication=state_values.get("proposed_medication"),
-        dosage=state_values.get("dosage"),
-        safety_approved=state_values.get("safety_approved", False),
-        risk_notes=state_values.get("risk_notes"),
-        human_approved=state_values.get("human_approved"),
-        doctor_comments=state_values.get("doctor_comments"),
-        is_paused_waiting_approval=is_paused,
-        audit_chain_valid=audit_valid,
-    )
+def get_prescription(thread_id: str, repo: Repo, key: SigningKey) -> PrescriptionResponse:
+    prescription_id = _prescription_id(thread_id)
+    return _response(prescription_id, _read(_stored(repo, prescription_id), prescription_id, key))
 
 
-@app.post(
+@router.post(
     "/api/v1/prescriptions/{thread_id}/approve",
     response_model=PrescriptionResponse,
     tags=["Prescriptions"],
-    summary="Submit doctor approval decision",
+    summary="Record the doctor's decision",
+    responses={
+        409: {
+            "description": "The prescription already has a decision, or its audit chain is invalid."
+        }
+    },
 )
-def approve_prescription(
-    thread_id: str,
-    req: DoctorApprovalRequest,
-    db: Session = Depends(get_db),
-):
-    """
-    Record the doctor's decision, append the final audit log entry,
-    and resume the LangGraph flow to completion.
-    """
-    config = {"configurable": {"thread_id": thread_id}}
-    current_state = orchestrator_app.get_state(config)
+def decide_prescription(
+    thread_id: str, req: DoctorApprovalRequest, repo: Repo, key: SigningKey
+) -> PrescriptionResponse:
+    prescription_id = _prescription_id(thread_id)
+    with repo.session.begin():
+        stored = _stored(repo, prescription_id)
+        rx = _read(stored, prescription_id, key)
+        if not rx.audit_valid:
+            raise HTTPException(409, f"Audit chain is invalid: {rx.audit_detail}")
+        if rx.status is not Status.PENDING_APPROVAL:
+            raise HTTPException(409, f"Prescription is already {rx.status.value}.")
 
-    if not current_state.values:
-        raise HTTPException(status_code=404, detail="Session not found.")
-
-    prescription_id: str = current_state.values["prescription_id"]
-    existing_logs = current_state.values.get("audit_logs", [])
-    last_log = existing_logs[-1] if existing_logs else None
-
-    human_log = create_audit_entry(
-        previous_log=last_log,
-        step="HUMAN_APPROVAL",
-        action="Doctor Decision Recorded via API",
-        details={"approved": req.approved, "comments": req.doctor_comments},
-    )
-
-    orchestrator_app.update_state(
-        config,
-        {
-            "human_approved": req.approved,
-            "doctor_comments": req.doctor_comments,
-            "audit_logs": [human_log],
-        },
-        as_node="safety_agent",
-    )
-
-    for _ in orchestrator_app.stream(None, config):
-        pass
-
-    final_values = orchestrator_app.get_state(config).values
-    audit_valid, _ = verify_audit_chain(final_values.get("audit_logs", []))
-
-    # ── Persist to DB (non-blocking failure) ──────────────────────────────────
-    try:
-        prescription_repo = PrescriptionRepository(db)
-        audit_repo = AuditLogRepository(db)
-
-        prescription_repo.finalize(
+        decision = DoctorDecision(approved=req.approved, comments=req.doctor_comments)
+        entry = new_entry(
+            stored.chain,
+            key=key,
             prescription_id=prescription_id,
-            human_approved=req.approved,
-            doctor_comments=req.doctor_comments,
+            step=Step.DOCTOR.value,
+            details=decision.model_dump(),
         )
-        audit_repo.bulk_create(prescription_id, [human_log])
-        logger.info("Prescription %s finalized in DB (approved=%s).", prescription_id, req.approved)
-    except Exception as exc:
-        logger.warning("DB persistence failed (non-blocking): %s", exc)
+        seal = seal_head(key, prescription_id, entry["hash"])
+        if not repo.append(prescription_id, stored.head_hash, entry, seal):
+            raise HTTPException(409, "Another decision was recorded first.")
+        return _response(
+            prescription_id, _read(_stored(repo, prescription_id), prescription_id, key)
+        )
 
-    return PrescriptionResponse(
-        thread_id=thread_id,
-        prescription_id=final_values["prescription_id"],
-        proposed_medication=final_values.get("proposed_medication"),
-        dosage=final_values.get("dosage"),
-        safety_approved=final_values.get("safety_approved", False),
-        risk_notes=final_values.get("risk_notes"),
-        human_approved=final_values.get("human_approved"),
-        doctor_comments=final_values.get("doctor_comments"),
-        is_paused_waiting_approval=False,
-        audit_chain_valid=audit_valid,
+
+@router.get(
+    "/api/v1/prescriptions/{thread_id}/audit",
+    response_model=AuditTrailResponse,
+    tags=["Prescriptions"],
+    summary="Return the stored audit chain and the verification result",
+)
+def get_audit_trail(thread_id: str, repo: Repo, key: SigningKey) -> AuditTrailResponse:
+    prescription_id = _prescription_id(thread_id)
+    stored = _stored(repo, prescription_id)
+    rx = _read(stored, prescription_id, key)
+    return AuditTrailResponse(
+        prescription_id=prescription_id,
+        valid=rx.audit_valid,
+        detail=rx.audit_detail,
+        entries=[
+            AuditEntryResponse(**entry).model_copy(
+                update={} if rx.audit_valid else {"details": None}
+            )
+            for entry in stored.chain
+        ],
     )
+
+
+app = create_api()
