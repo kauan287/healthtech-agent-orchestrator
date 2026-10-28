@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # Header that holds the client IP behind a proxy, e.g. CF-Connecting-IP. Empty uses the socket peer.
     CLIENT_IP_HEADER: str = ""
 
+    # Comma-separated browser origins allowed to call the API, e.g. https://console.example.com.
+    CORS_ORIGINS: str = ""
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
     @model_validator(mode="after")
     def _check_secrets(self) -> Self:
         if self.LLM_PROVIDER == "groq" and not self.GROQ_API_KEY:

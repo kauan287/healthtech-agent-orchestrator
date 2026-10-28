@@ -14,10 +14,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.api_schemas import (
     AuditEntryResponse,
@@ -59,6 +61,7 @@ def create_api(settings: Settings | None = None) -> FastAPI:
             else None
         )
         app.state.client_ip_header = resolved.CLIENT_IP_HEADER
+        app.state.cors_origins = resolved.cors_origins
         logger.info(
             "Ready: llm=%s, database=%s", resolved.LLM_PROVIDER, engine.url.get_backend_name()
         )
@@ -79,7 +82,29 @@ def create_api(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(RequestValidationError, _validation_error)
     # Registered unconditionally because settings are only resolved in the lifespan.
     app.middleware("http")(_rate_limit)
+    # Added last so it runs first and a 429 from the rate limit still carries CORS headers.
+    app.add_middleware(_CORSFromState)
     return app
+
+
+class _CORSFromState:
+    """CORSMiddleware with the origins the lifespan resolved, or a pass-through if there are none."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        origins: list[str] = scope["app"].state.cors_origins if scope["type"] == "http" else []
+        if not origins:
+            await self.app(scope, receive, send)
+            return
+        cors = CORSMiddleware(
+            self.app,
+            allow_origins=origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type"],
+        )
+        await cors(scope, receive, send)
 
 
 async def _rate_limit(
