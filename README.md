@@ -10,7 +10,7 @@ A FastAPI service that reviews prescriptions with two LangGraph agents and a doc
 A triage agent proposes a medication, a safety agent checks it against the patient's allergies, and the prescription then waits until a doctor approves or rejects it.
 Every step is written to an audit chain signed with HMAC-SHA256, and every read verifies that chain.
 If someone edits the database by hand, the API withholds the prescription's clinical data and reports `audit_chain_valid: false`, so the companion dispenser refuses to release the medication.
-**Live demo.** Interactive API docs at https://healthtech-orchestrator.onrender.com/docs, and the companion dispenser's dashboard at https://smartdispenser-core.onrender.com/dashboard. Both run on Render's free plan, so the first request after 15 idle minutes takes about a minute while the service starts. The data resets on every restart.
+**Live demo.** The [doctor console](https://github.com/kauan287/healthtech-doctor-console) at https://healthtech-doctor-console.onrender.com, interactive API docs at https://healthtech-orchestrator.onrender.com/docs, and the companion dispenser's dashboard at https://smartdispenser-core.onrender.com/dashboard. Both run on Render's free plan, so the first request after 15 idle minutes takes about a minute while the service starts. The data resets on every restart.
 
 The clinical text is in Spanish because the demo targets Spanish-speaking clinics. That covers the prompts, the demo rule table, and the sample requests. Code, API fields, and error messages are in English.
 
@@ -47,6 +47,7 @@ sequenceDiagram
 - Reads that trust only verified, signed entries (`src/prescription.py`). A tampered prescription comes back as `INVALID` with every clinical field set to null.
 - A doctor's decision that is a compare-and-swap on the signed chain head. Of two concurrent decisions, exactly one is recorded, and the tests check that on SQLite and on PostgreSQL.
 - CI that runs ruff, `mypy --strict`, and 50 tests on SQLite and PostgreSQL. It then starts the Docker Compose stack, restarts the API while a prescription waits for the doctor, and edits an audit row with `psql` to check that the API reports the tampering.
+- A React doctor console that consumes this API, with types generated from its OpenAPI schema and Playwright tests against the real service ([healthtech-doctor-console](https://github.com/kauan287/healthtech-doctor-console)).
 - A second service in C# that consumes this API. [SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) releases a medication only for an approved prescription whose chain verifies.
 
 ## Run it
