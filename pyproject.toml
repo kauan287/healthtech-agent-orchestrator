@@ -27,7 +27,6 @@ dev = [
     "ruff>=0.5",
 ]
 
-# ── Ruff ──────────────────────────────────────────────────────────────────────
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -35,26 +34,20 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B"]
 ignore = [
-    "E501",   # line too long — handled by formatter
+    "E501",   # line length is the formatter's job
     "B008",   # do not perform function calls in default arguments (FastAPI Depends)
 ]
 
-[tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]  # allow assert statements in tests
-
-# ── Mypy ──────────────────────────────────────────────────────────────────────
 [tool.mypy]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 
-# ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "--tb=short"
 
-# ── Coverage ──────────────────────────────────────────────────────────────────
 [tool.coverage.run]
 source = ["src"]
 omit = ["src/__init__.py"]

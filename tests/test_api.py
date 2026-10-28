@@ -326,7 +326,7 @@ def test_readiness_checks_the_database(client: TestClient) -> None:
 
 
 def test_response_keeps_the_fields_smartdispenser_reads(client: TestClient) -> None:
-    """Mirror of HealthTechPrescriptionResponse in smartdispenser-core's HealthTechApiClient.cs."""
+    """Mirror of OrchestratorSession in smartdispenser-core's HealthTechApiClient.cs."""
     body = client.get(f"/api/v1/prescriptions/{create(client)['thread_id']}").json()
     contract: dict[str, type | tuple[type, ...]] = {
         "thread_id": str,
