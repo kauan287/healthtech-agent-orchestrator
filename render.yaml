@@ -20,6 +20,8 @@ services:
         value: "60"
       - key: CLIENT_IP_HEADER
         value: CF-Connecting-IP
+      - key: CORS_ORIGINS
+        value: https://healthtech-doctor-console.onrender.com
 
   - type: web
     name: smartdispenser-core
@@ -44,3 +46,17 @@ services:
         value: "300"
       - key: RateLimit__ClientIpHeader
         value: CF-Connecting-IP
+
+  - type: web
+    name: healthtech-doctor-console
+    runtime: static
+    repo: https://github.com/kauan287/healthtech-doctor-console
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://healthtech-orchestrator.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
