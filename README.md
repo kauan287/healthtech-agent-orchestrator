@@ -51,6 +51,34 @@ It calls `GET /api/v1/prescriptions/session-{prescription_id}` on this service a
 `tests/test_api.py::test_response_keeps_the_fields_smartdispenser_reads` pins the fields that SmartDispenser deserializes.
 New fields are safe to add. Renaming or removing one breaks the dispenser.
 
+### Run both services together
+
+`scripts/ecosystem_e2e.py` drives the whole pipeline across both services. It plays a vending machine over SignalR, gets a prescription approved here, pays through SmartDispenser's signed webhook, and checks that the machine receives the medication. It also checks that SmartDispenser refuses a pending, a rejected, and a tampered prescription.
+You need [uv](https://docs.astral.sh/uv/) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). Start each service in its own terminal:
+
+```bash
+# this repository
+ENVIRONMENT=development LLM_PROVIDER=demo DATABASE_URL=sqlite:////tmp/ecosystem.db \
+	uv run uvicorn src.server:app --port 8000
+
+# smartdispenser-core
+HealthTechApi__BaseUrl=http://localhost:8000 dotnet run --project src/SmartDispenser.API
+```
+
+Then run the check from this repository:
+
+```bash
+uv run --with websockets python scripts/ecosystem_e2e.py \
+	http://localhost:8000 http://localhost:5000 local-development-secret-not-for-production /tmp/ecosystem.db
+# ...
+# ok   machine told what to release: ('…', 'Paracetamol')
+# ok   dispense completed: 'Completed'
+# ok   tampered prescription is refused: (422, 'Audit chain integrity check failed: possible data tampering.')
+# PASS ecosystem e2e
+```
+
+CI does not run this script, because it needs both repositories. Each repository's CI checks its own side of the contract.
+
 ## Run it
 
 You need Docker. If you ran an earlier version, delete its database volume first with `docker compose down -v`, because the schema changed and `create_all` does not migrate it.
@@ -220,6 +248,7 @@ src/
 └── config.py        Settings and startup validation
 tests/               pytest suite, runs the real app on a temporary SQLite database
 scripts/e2e.py       HTTP end-to-end check, standard library only
+scripts/ecosystem_e2e.py  End-to-end check across this service and SmartDispenser Core
 ```
 
 ## License
