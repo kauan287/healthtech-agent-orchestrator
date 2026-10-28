@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -24,6 +24,7 @@ from src.api_schemas import (
     AuditTrailResponse,
     CreatePrescriptionRequest,
     DoctorApprovalRequest,
+    PrescriptionListResponse,
     PrescriptionResponse,
 )
 from src.audit import new_entry, seal_head
@@ -221,6 +222,23 @@ def create_prescription(
         if repo.head(req.prescription_id) is not None:
             raise conflict from None
         raise
+
+
+@router.get(
+    "/api/v1/prescriptions",
+    response_model=PrescriptionListResponse,
+    tags=["Prescriptions"],
+    summary="List the newest prescriptions, each verified against its audit chain",
+)
+def list_prescriptions(
+    repo: Repo, key: SigningKey, limit: Annotated[int, Query(ge=1, le=100)] = 50
+) -> PrescriptionListResponse:
+    items = []
+    for prescription_id in repo.newest_ids(limit):
+        stored = repo.snapshot(prescription_id)
+        if stored is not None:
+            items.append(_response(prescription_id, _read(stored, prescription_id, key)))
+    return PrescriptionListResponse(items=items)
 
 
 @router.get(

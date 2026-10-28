@@ -52,6 +52,10 @@ class PrescriptionResponse(BaseModel):
     created_at: str | None = Field(description="When the triage agent signed its entry, ISO 8601.")
 
 
+class PrescriptionListResponse(BaseModel):
+    items: list[PrescriptionResponse]
+
+
 class AuditEntryResponse(BaseModel):
     step: str
     action: str

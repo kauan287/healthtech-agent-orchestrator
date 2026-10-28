@@ -364,3 +364,42 @@ def test_response_keeps_the_fields_smartdispenser_reads(client: TestClient) -> N
     }
     for field, kind in contract.items():
         assert isinstance(body[field], kind), field
+
+
+def listed(client: TestClient, query: str = "") -> list[tuple[str, str]]:
+    response = client.get(f"/api/v1/prescriptions{query}")
+    assert response.status_code == 200, response.text
+    return [(rx["prescription_id"], rx["status"]) for rx in response.json()["items"]]
+
+
+def test_list_returns_the_newest_prescriptions_first(client: TestClient) -> None:
+    for prescription_id in ("RX-001", "RX-002", "RX-003"):
+        create(client, prescription_id=prescription_id)
+    decide(client, approved=True, thread="session-RX-002")
+    assert listed(client) == [
+        ("RX-003", "PENDING_APPROVAL"),
+        ("RX-002", "APPROVED"),
+        ("RX-001", "PENDING_APPROVAL"),
+    ]
+    assert listed(client, "?limit=2") == [("RX-003", "PENDING_APPROVAL"), ("RX-002", "APPROVED")]
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+def test_list_limit_must_be_between_1_and_100(client: TestClient, limit: int) -> None:
+    assert client.get(f"/api/v1/prescriptions?limit={limit}").status_code == 422
+
+
+def test_list_shows_a_tampered_prescription_as_invalid(client: TestClient, raw_db: Engine) -> None:
+    create(client)
+    create(client, prescription_id="RX-002")
+    sql(
+        raw_db,
+        "UPDATE audit_logs SET details = replace(details, 'Paracetamol', 'Morfina') "
+        "WHERE prescription_id = 'RX-001'",
+    )
+    items = client.get("/api/v1/prescriptions").json()["items"]
+    assert [(rx["prescription_id"], rx["proposed_medication"]) for rx in items] == [
+        ("RX-002", "Paracetamol"),
+        ("RX-001", None),
+    ]
+    assert items[1] == {"thread_id": THREAD, "prescription_id": "RX-001", **NO_FACTS}
