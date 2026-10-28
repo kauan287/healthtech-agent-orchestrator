@@ -10,6 +10,8 @@ A FastAPI service that reviews prescriptions with two LangGraph agents and a doc
 A triage agent proposes a medication, a safety agent checks it against the patient's allergies, and the prescription then waits until a doctor approves or rejects it.
 Every step is written to an audit chain signed with HMAC-SHA256, and every read verifies that chain.
 If someone edits the database by hand, the API withholds the prescription's clinical data and reports `audit_chain_valid: false`, so the companion dispenser refuses to release the medication.
+**Live demo.** Interactive API docs at https://healthtech-orchestrator.onrender.com/docs, and the companion dispenser's dashboard at https://smartdispenser-core.onrender.com/dashboard. Both run on Render's free plan, so the first request after 15 idle minutes takes about a minute while the service starts. The data resets on every restart.
+
 The clinical text is in Spanish because the demo targets Spanish-speaking clinics. That covers the prompts, the demo rule table, and the sample requests. Code, API fields, and error messages are in English.
 
 ```mermaid
