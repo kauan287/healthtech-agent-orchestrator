@@ -187,6 +187,8 @@ CI does not run this script, because it needs both repositories. Each repository
 | `AUDIT_SIGNING_KEY` | a development key | Signs the audit chain. With `ENVIRONMENT=production`, the app refuses to start on the development key or on a key shorter than 32 characters. |
 | `ENVIRONMENT` | `production` (`development` in `.env.example` and Compose) | `development`, `test`, or `production`. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
+| `RATE_LIMIT_PER_MINUTE` | `0` | Requests each client may make per minute. Over the limit, the API answers 429 with `Retry-After`. `/health` is exempt. `0` turns the limit off. |
+| `CLIENT_IP_HEADER` | empty | Header that carries the client IP behind a proxy, such as `CF-Connecting-IP` behind Cloudflare. Empty uses the connection's peer address. |
 
 ## How the audit chain works
 
