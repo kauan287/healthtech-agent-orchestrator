@@ -29,6 +29,11 @@ class Status(StrEnum):
     INVALID = "INVALID"
 
 
+class SignedTriage(TriageRecommendation):
+    patient_symptoms: str
+    patient_allergies: list[str]
+
+
 class DoctorDecision(BaseModel):
     approved: StrictBool
     comments: str
@@ -42,7 +47,8 @@ DECIDED_STEPS = [Step.TRIAGE, Step.SAFETY, Step.DOCTOR]
 class Prescription:
     audit_valid: bool
     audit_detail: str
-    triage: TriageRecommendation | None = None
+    created_at: str | None = None
+    triage: SignedTriage | None = None
     safety: SafetyCheck | None = None
     decision: DoctorDecision | None = None
 
@@ -71,7 +77,8 @@ def read_prescription(
         return Prescription(
             audit_valid=True,
             audit_detail=check.detail,
-            triage=TriageRecommendation.model_validate(details[0]),
+            created_at=chain[0]["timestamp"],
+            triage=SignedTriage.model_validate(details[0]),
             safety=SafetyCheck.model_validate(details[1]),
             decision=DoctorDecision.model_validate(details[2]) if len(details) == 3 else None,
         )

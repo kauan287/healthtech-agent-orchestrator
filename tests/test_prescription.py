@@ -7,6 +7,8 @@ from src.prescription import Prescription, Status, read_prescription
 
 KEY = b"unit-test-key"
 TRIAGE = {
+    "patient_symptoms": "fiebre",
+    "patient_allergies": ["Ibuprofeno"],
     "proposed_medication": "Paracetamol",
     "dosage": "500 mg",
     "reasoning": "r",
@@ -63,6 +65,13 @@ def test_signed_details_with_the_wrong_schema_are_invalid() -> None:
     )
     assert rx.status is Status.INVALID
     assert rx.audit_detail.startswith("Signed details do not match the expected schema")
+
+
+def test_triage_without_the_signed_intake_is_invalid() -> None:
+    intake_missing = {k: v for k, v in TRIAGE.items() if k != "patient_allergies"}
+    rx = signed(("TRIAGE_AGENT", intake_missing), ("SAFETY_AGENT", SAFETY))
+    assert (rx.status, rx.triage) == (Status.INVALID, None)
+    assert "patient_allergies" in rx.audit_detail
 
 
 def test_decision_must_be_a_real_boolean() -> None:

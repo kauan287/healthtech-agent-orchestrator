@@ -165,6 +165,11 @@ def _response(prescription_id: str, rx: Prescription) -> PrescriptionResponse:
         doctor_comments=rx.decision.comments if rx.decision else None,
         is_paused_waiting_approval=rx.status is Status.PENDING_APPROVAL,
         audit_chain_valid=rx.audit_valid,
+        patient_symptoms=rx.triage.patient_symptoms if rx.triage else None,
+        patient_allergies=rx.triage.patient_allergies if rx.triage else None,
+        urgency_level=rx.triage.urgency_level if rx.triage else None,
+        triage_reasoning=rx.triage.reasoning if rx.triage else None,
+        created_at=rx.created_at,
     )
 
 

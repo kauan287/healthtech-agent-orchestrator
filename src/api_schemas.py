@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, Field
 
@@ -45,6 +45,11 @@ class PrescriptionResponse(BaseModel):
     doctor_comments: str | None
     is_paused_waiting_approval: bool
     audit_chain_valid: bool
+    patient_symptoms: str | None
+    patient_allergies: list[str] | None
+    urgency_level: Literal["ALTO", "MEDIO", "BAJO"] | None
+    triage_reasoning: str | None
+    created_at: str | None = Field(description="When the triage agent signed its entry, ISO 8601.")
 
 
 class AuditEntryResponse(BaseModel):

@@ -1,6 +1,7 @@
 import json
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime, tzinfo
 from typing import Any
 
 import pytest
@@ -26,7 +27,18 @@ NO_FACTS = {
     "doctor_comments": None,
     "is_paused_waiting_approval": False,
     "audit_chain_valid": False,
+    "patient_symptoms": None,
+    "patient_allergies": None,
+    "urgency_level": None,
+    "triage_reasoning": None,
+    "created_at": None,
 }
+
+
+class FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> "FrozenDatetime":
+        return cls(2026, 3, 14, 9, 30, tzinfo=UTC)
 
 
 def create(client: TestClient, **overrides: Any) -> Any:
@@ -51,8 +63,11 @@ def sql(raw_db: Engine, statement: str) -> None:
         conn.execute(text(statement))
 
 
-def test_agents_propose_and_wait_for_the_doctor(client: TestClient) -> None:
-    assert create(client) == {
+def test_agents_propose_and_wait_for_the_doctor(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("src.audit.datetime", FrozenDatetime)
+    expected = {
         "thread_id": THREAD,
         "prescription_id": "RX-001",
         "status": "PENDING_APPROVAL",
@@ -64,7 +79,14 @@ def test_agents_propose_and_wait_for_the_doctor(client: TestClient) -> None:
         "doctor_comments": None,
         "is_paused_waiting_approval": True,
         "audit_chain_valid": True,
+        "patient_symptoms": "Fiebre de 39 °C y dolor articular",
+        "patient_allergies": ["Ibuprofeno"],
+        "urgency_level": "MEDIO",
+        "triage_reasoning": "Analgésico y antipirético de primera línea.",
+        "created_at": "2026-03-14T09:30:00+00:00",
     }
+    assert create(client) == expected
+    assert read(client) == expected
 
 
 def test_safety_agent_flags_an_allergy_conflict(client: TestClient) -> None:
