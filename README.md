@@ -176,6 +176,19 @@ uv run --with websockets python scripts/ecosystem_e2e.py \
 
 CI does not run this script, because it needs both repositories. Each repository's CI checks its own side of the contract.
 
+### Deploy both services to Render
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/kauan287/healthtech-agent-orchestrator)
+
+`render.yaml` is a Render Blueprint for both services on the free plan. The orchestrator runs with `LLM_PROVIDER=demo` on SQLite, and SmartDispenser runs on its in-memory database. Both lose their data when Render restarts or spins them down, after 15 minutes without traffic. Render generates `AUDIT_SIGNING_KEY` and SmartDispenser's `Webhook__Secret`. Each service limits a client, keyed by `CF-Connecting-IP`, to 60 or 300 requests per minute.
+
+To check the deployed pipeline, copy `Webhook__Secret` from the Render dashboard and run the end-to-end script without a database path. It then skips the tamper step, because it cannot edit the remote database:
+
+```bash
+uv run --with websockets python scripts/ecosystem_e2e.py \
+	https://<orchestrator>.onrender.com https://<smartdispenser>.onrender.com <webhook-secret>
+```
+
 ## Configuration
 
 | Variable | Default | Purpose |
