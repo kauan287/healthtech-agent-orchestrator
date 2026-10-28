@@ -11,19 +11,22 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.api_schemas import (
     AuditEntryResponse,
     AuditTrailResponse,
     CreatePrescriptionRequest,
     DoctorApprovalRequest,
+    PrescriptionListResponse,
     PrescriptionResponse,
 )
 from src.audit import new_entry, seal_head
@@ -58,6 +61,7 @@ def create_api(settings: Settings | None = None) -> FastAPI:
             else None
         )
         app.state.client_ip_header = resolved.CLIENT_IP_HEADER
+        app.state.cors_origins = resolved.cors_origins
         logger.info(
             "Ready: llm=%s, database=%s", resolved.LLM_PROVIDER, engine.url.get_backend_name()
         )
@@ -78,7 +82,29 @@ def create_api(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(RequestValidationError, _validation_error)
     # Registered unconditionally because settings are only resolved in the lifespan.
     app.middleware("http")(_rate_limit)
+    # Added last so it runs first and a 429 from the rate limit still carries CORS headers.
+    app.add_middleware(_CORSFromState)
     return app
+
+
+class _CORSFromState:
+    """CORSMiddleware with the origins the lifespan resolved, or a pass-through if there are none."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        origins: list[str] = scope["app"].state.cors_origins if scope["type"] == "http" else []
+        if not origins:
+            await self.app(scope, receive, send)
+            return
+        cors = CORSMiddleware(
+            self.app,
+            allow_origins=origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type"],
+        )
+        await cors(scope, receive, send)
 
 
 async def _rate_limit(
@@ -165,6 +191,11 @@ def _response(prescription_id: str, rx: Prescription) -> PrescriptionResponse:
         doctor_comments=rx.decision.comments if rx.decision else None,
         is_paused_waiting_approval=rx.status is Status.PENDING_APPROVAL,
         audit_chain_valid=rx.audit_valid,
+        patient_symptoms=rx.triage.patient_symptoms if rx.triage else None,
+        patient_allergies=rx.triage.patient_allergies if rx.triage else None,
+        urgency_level=rx.triage.urgency_level if rx.triage else None,
+        triage_reasoning=rx.triage.reasoning if rx.triage else None,
+        created_at=rx.created_at,
     )
 
 
@@ -216,6 +247,23 @@ def create_prescription(
         if repo.head(req.prescription_id) is not None:
             raise conflict from None
         raise
+
+
+@router.get(
+    "/api/v1/prescriptions",
+    response_model=PrescriptionListResponse,
+    tags=["Prescriptions"],
+    summary="List the newest prescriptions, each verified against its audit chain",
+)
+def list_prescriptions(
+    repo: Repo, key: SigningKey, limit: Annotated[int, Query(ge=1, le=100)] = 50
+) -> PrescriptionListResponse:
+    items = []
+    for prescription_id in repo.newest_ids(limit):
+        stored = repo.snapshot(prescription_id)
+        if stored is not None:
+            items.append(_response(prescription_id, _read(stored, prescription_id, key)))
+    return PrescriptionListResponse(items=items)
 
 
 @router.get(

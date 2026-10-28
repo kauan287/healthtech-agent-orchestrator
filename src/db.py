@@ -73,6 +73,15 @@ class PrescriptionRepository:
         ).one_or_none()
         return (row.head_hash, row.seal) if row else None
 
+    def newest_ids(self, limit: int) -> list[str]:
+        return list(
+            self.session.scalars(
+                select(PrescriptionRecord.prescription_id)
+                .order_by(PrescriptionRecord.id.desc())
+                .limit(limit)
+            )
+        )
+
     def snapshot(self, prescription_id: str) -> StoredChain | None:
         """Read the head and the chain as one consistent state, or None if unknown.
 

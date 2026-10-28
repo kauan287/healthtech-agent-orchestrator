@@ -1,6 +1,7 @@
 import json
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime, tzinfo
 from typing import Any
 
 import pytest
@@ -26,7 +27,18 @@ NO_FACTS = {
     "doctor_comments": None,
     "is_paused_waiting_approval": False,
     "audit_chain_valid": False,
+    "patient_symptoms": None,
+    "patient_allergies": None,
+    "urgency_level": None,
+    "triage_reasoning": None,
+    "created_at": None,
 }
+
+
+class FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> "FrozenDatetime":
+        return cls(2026, 3, 14, 9, 30, tzinfo=UTC)
 
 
 def create(client: TestClient, **overrides: Any) -> Any:
@@ -51,8 +63,11 @@ def sql(raw_db: Engine, statement: str) -> None:
         conn.execute(text(statement))
 
 
-def test_agents_propose_and_wait_for_the_doctor(client: TestClient) -> None:
-    assert create(client) == {
+def test_agents_propose_and_wait_for_the_doctor(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("src.audit.datetime", FrozenDatetime)
+    expected = {
         "thread_id": THREAD,
         "prescription_id": "RX-001",
         "status": "PENDING_APPROVAL",
@@ -64,7 +79,14 @@ def test_agents_propose_and_wait_for_the_doctor(client: TestClient) -> None:
         "doctor_comments": None,
         "is_paused_waiting_approval": True,
         "audit_chain_valid": True,
+        "patient_symptoms": "Fiebre de 39 °C y dolor articular",
+        "patient_allergies": ["Ibuprofeno"],
+        "urgency_level": "MEDIO",
+        "triage_reasoning": "Analgésico y antipirético de primera línea.",
+        "created_at": "2026-03-14T09:30:00+00:00",
     }
+    assert create(client) == expected
+    assert read(client) == expected
 
 
 def test_safety_agent_flags_an_allergy_conflict(client: TestClient) -> None:
@@ -342,3 +364,42 @@ def test_response_keeps_the_fields_smartdispenser_reads(client: TestClient) -> N
     }
     for field, kind in contract.items():
         assert isinstance(body[field], kind), field
+
+
+def listed(client: TestClient, query: str = "") -> list[tuple[str, str]]:
+    response = client.get(f"/api/v1/prescriptions{query}")
+    assert response.status_code == 200, response.text
+    return [(rx["prescription_id"], rx["status"]) for rx in response.json()["items"]]
+
+
+def test_list_returns_the_newest_prescriptions_first(client: TestClient) -> None:
+    for prescription_id in ("RX-001", "RX-002", "RX-003"):
+        create(client, prescription_id=prescription_id)
+    decide(client, approved=True, thread="session-RX-002")
+    assert listed(client) == [
+        ("RX-003", "PENDING_APPROVAL"),
+        ("RX-002", "APPROVED"),
+        ("RX-001", "PENDING_APPROVAL"),
+    ]
+    assert listed(client, "?limit=2") == [("RX-003", "PENDING_APPROVAL"), ("RX-002", "APPROVED")]
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+def test_list_limit_must_be_between_1_and_100(client: TestClient, limit: int) -> None:
+    assert client.get(f"/api/v1/prescriptions?limit={limit}").status_code == 422
+
+
+def test_list_shows_a_tampered_prescription_as_invalid(client: TestClient, raw_db: Engine) -> None:
+    create(client)
+    create(client, prescription_id="RX-002")
+    sql(
+        raw_db,
+        "UPDATE audit_logs SET details = replace(details, 'Paracetamol', 'Morfina') "
+        "WHERE prescription_id = 'RX-001'",
+    )
+    items = client.get("/api/v1/prescriptions").json()["items"]
+    assert [(rx["prescription_id"], rx["proposed_medication"]) for rx in items] == [
+        ("RX-002", "Paracetamol"),
+        ("RX-001", None),
+    ]
+    assert items[1] == {"thread_id": THREAD, "prescription_id": "RX-001", **NO_FACTS}
