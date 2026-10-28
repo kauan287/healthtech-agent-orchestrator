@@ -199,7 +199,7 @@ uv run --with websockets python scripts/ecosystem_e2e.py \
 |---|---|---|
 | `LLM_PROVIDER` | `groq` (`demo` in `.env.example` and Compose) | `groq` calls the LLM. `demo` uses the rule table in `src/clinical.py`. |
 | `GROQ_API_KEY` | empty | Required when `LLM_PROVIDER=groq`. The app refuses to start without it. |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Any Groq chat model with tool calling. |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | A Groq chat model id. The gpt-oss models answer through strict JSON-schema output. Other models need tool calling. |
 | `DATABASE_URL` | `sqlite:///./healthtech.db` | `sqlite:///...` or `postgresql+psycopg://...` |
 | `AUDIT_SIGNING_KEY` | a development key | Signs the audit chain. With `ENVIRONMENT=production`, the app refuses to start on the development key or on a key shorter than 32 characters. |
 | `ENVIRONMENT` | `production` (`development` in `.env.example` and Compose) | `development`, `test`, or `production`. |
