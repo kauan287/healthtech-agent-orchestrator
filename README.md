@@ -130,6 +130,7 @@ Local runs use SQLite (`healthtech.db`). Without a `.env` file, the app uses its
 | Method and path | Result |
 |---|---|
 | `POST /api/v1/prescriptions` | Runs both agents and pauses for the doctor. Returns 201, or 409 if the `prescription_id` exists. |
+| `GET /api/v1/prescriptions?limit=50` | `{"items": [...]}` with the newest prescriptions first, each read like the single `GET`. A tampered one is listed as `INVALID`. `limit` is 1 to 100. |
 | `GET /api/v1/prescriptions/{thread_id}` | The prescription, read from the verified audit chain. Returns 404 if unknown. |
 | `POST /api/v1/prescriptions/{thread_id}/approve` | Records `{"approved": bool, "doctor_comments": str}`. Returns 409 if a decision exists or the audit chain is invalid. |
 | `GET /api/v1/prescriptions/{thread_id}/audit` | Every stored audit entry plus the verification result. If the chain is invalid, each `details` is null. |
@@ -204,6 +205,7 @@ uv run --with websockets python scripts/ecosystem_e2e.py \
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `RATE_LIMIT_PER_MINUTE` | `0` | Requests each client may make per minute. Over the limit, the API answers 429 with `Retry-After`. `/health` is exempt. `0` turns the limit off. |
 | `CLIENT_IP_HEADER` | empty | Header that carries the client IP behind a proxy, such as `CF-Connecting-IP` behind Cloudflare. Empty uses the connection's peer address. |
+| `CORS_ORIGINS` | empty | Comma-separated browser origins that may call the API, such as `https://console.example.com`. Allows `GET` and `POST` with a `Content-Type` header. Empty turns CORS off. |
 
 ## How the audit chain works
 
