@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import model_validator
+from pydantic import NonNegativeInt, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_AUDIT_SIGNING_KEY = "dev-only-audit-signing-key-change-me"
@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./healthtech.db"
 
     AUDIT_SIGNING_KEY: str = DEV_AUDIT_SIGNING_KEY
+
+    # Requests per client per minute. 0 turns the limit off.
+    RATE_LIMIT_PER_MINUTE: NonNegativeInt = 0
+    # Header that holds the client IP behind a proxy, e.g. CF-Connecting-IP. Empty uses the socket peer.
+    CLIENT_IP_HEADER: str = ""
 
     @model_validator(mode="after")
     def _check_secrets(self) -> Self:

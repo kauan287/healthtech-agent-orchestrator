@@ -2,12 +2,16 @@
 
 Usage:
     uv run --with websockets python scripts/ecosystem_e2e.py \
-        http://localhost:8000 http://localhost:5000 <webhook-secret> <orchestrator-sqlite-path>
+        <orchestrator-url> <dispenser-url> <webhook-secret> [orchestrator-sqlite-path]
 
-The orchestrator must run with LLM_PROVIDER=demo on the SQLite file given, and
-SmartDispenser must use it as HealthTechApi:BaseUrl. The script plays a vending
-machine over SignalR, approves and rejects prescriptions, pays through the signed
-webhook, and edits the orchestrator database the way an attacker would.
+For example, locally:
+    ... http://localhost:8000 http://localhost:5000 <webhook-secret> ./healthtech.db
+
+The orchestrator must run with LLM_PROVIDER=demo, and SmartDispenser must use it
+as HealthTechApi:BaseUrl. The script plays a vending machine over SignalR,
+approves and rejects prescriptions, and pays through the signed webhook. Given
+the orchestrator's SQLite file, it also edits that database the way an attacker
+would. Without it, as against remote URLs, it skips the tamper step.
 """
 
 import asyncio
@@ -27,7 +31,9 @@ RECORD_SEPARATOR = "\x1e"
 
 
 class Ecosystem:
-    def __init__(self, orchestrator: str, dispenser: str, secret: str, db_path: str) -> None:
+    def __init__(
+        self, orchestrator: str, dispenser: str, secret: str, db_path: str | None = None
+    ) -> None:
         self.orchestrator = orchestrator.rstrip("/")
         self.dispenser = dispenser.rstrip("/")
         self.secret = secret.encode()
@@ -100,8 +106,8 @@ class Ecosystem:
             **{"X-Signature-SHA256": f"sha256={signature}"},
         )[1]
 
-    def tamper(self, pid: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+    def tamper(self, db_path: str, pid: str) -> None:
+        with sqlite3.connect(db_path) as conn:
             conn.execute(
                 "UPDATE audit_logs SET details = replace(details, 'Paracetamol', 'Morfina') "
                 "WHERE prescription_id = ? AND step = 'TRIAGE_AGENT'",
@@ -201,14 +207,17 @@ async def main() -> None:
         (422, "Doctor has not approved this prescription."),
     )
 
-    tampered = eco.prescription(approved=True)
-    eco.tamper(tampered)
-    status, body = eco.dispense(machine_id, tampered)
-    expect(
-        "tampered prescription is refused",
-        (status, body["detail"]),
-        (422, "Audit chain integrity check failed: possible data tampering."),
-    )
+    if eco.db_path is None:
+        print("skip tampered prescription is refused: orchestrator database not reachable")
+    else:
+        tampered = eco.prescription(approved=True)
+        eco.tamper(eco.db_path, tampered)
+        status, body = eco.dispense(machine_id, tampered)
+        expect(
+            "tampered prescription is refused",
+            (status, body["detail"]),
+            (422, "Audit chain integrity check failed: possible data tampering."),
+        )
     simulator.cancel()
     print("PASS ecosystem e2e")
 

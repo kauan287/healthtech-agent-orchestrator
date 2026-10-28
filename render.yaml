@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: healthtech-orchestrator
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health/ready
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: ENVIRONMENT
+        value: production
+      - key: LLM_PROVIDER
+        value: demo
+      - key: DATABASE_URL
+        value: sqlite:////tmp/healthtech.db
+      - key: AUDIT_SIGNING_KEY
+        generateValue: true
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "60"
+      - key: CLIENT_IP_HEADER
+        value: CF-Connecting-IP
+
+  - type: web
+    name: smartdispenser-core
+    runtime: docker
+    repo: https://github.com/kauan287/smartdispenser-core
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health/ready
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: Database__Provider
+        value: InMemory
+      - key: Webhook__Secret
+        generateValue: true
+      - key: HealthTechApi__BaseUrl
+        fromService:
+          name: healthtech-orchestrator
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: RateLimit__PermitsPerMinute
+        value: "300"
+      - key: RateLimit__ClientIpHeader
+        value: CF-Connecting-IP

@@ -7,13 +7,14 @@ LangGraph pipeline is called through its sync API. FastAPI runs them in a thread
 
 import json
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -31,6 +32,7 @@ from src.config import Settings, get_settings
 from src.db import Base, PrescriptionRepository, StoredChain
 from src.graph import Pipeline, build_pipeline
 from src.prescription import DoctorDecision, Prescription, Status, Step, read_prescription
+from src.rate_limit import FixedWindowLimiter
 
 VERSION = "1.1.0"
 THREAD_PREFIX = "session-"
@@ -50,6 +52,12 @@ def create_api(settings: Settings | None = None) -> FastAPI:
         app.state.signing_key = key
         app.state.sessions = sessionmaker(engine, expire_on_commit=False)
         app.state.pipeline = build_pipeline(build_clinical_model(resolved), key)
+        app.state.rate_limiter = (
+            FixedWindowLimiter(resolved.RATE_LIMIT_PER_MINUTE)
+            if resolved.RATE_LIMIT_PER_MINUTE > 0
+            else None
+        )
+        app.state.client_ip_header = resolved.CLIENT_IP_HEADER
         logger.info(
             "Ready: llm=%s, database=%s", resolved.LLM_PROVIDER, engine.url.get_backend_name()
         )
@@ -68,7 +76,30 @@ def create_api(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(router)
     app.add_exception_handler(RequestValidationError, _validation_error)
+    # Registered unconditionally because settings are only resolved in the lifespan.
+    app.middleware("http")(_rate_limit)
     return app
+
+
+async def _rate_limit(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    limiter: FixedWindowLimiter | None = request.app.state.rate_limiter
+    path = request.url.path
+    if limiter is None or path == "/health" or path.startswith("/health/"):
+        return await call_next(request)
+    header: str = request.app.state.client_ip_header
+    client = (header and request.headers.get(header)) or (
+        request.client.host if request.client else "unknown"
+    )
+    retry_after = limiter.hit(client)
+    if retry_after is not None:
+        return JSONResponse(
+            {"detail": "Too many requests. Try again in a minute."},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
+    return await call_next(request)
 
 
 async def _validation_error(request: Request, exc: Exception) -> Response:
