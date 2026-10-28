@@ -11,8 +11,16 @@ concurrency:
 
 jobs:
   check:
-    name: Lint, types, tests
+    name: Lint, types, tests on SQLite and PostgreSQL
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 15
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.2
@@ -24,6 +32,10 @@ jobs:
       - run: uv run ruff format --check src tests scripts
       - run: uv run mypy src tests scripts
       - run: uv run pytest --cov=src --cov-report=term-missing
+      - name: Tests on PostgreSQL
+        run: uv run pytest -q
+        env:
+          TEST_POSTGRES_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
 
   e2e:
     name: Docker Compose end-to-end (Postgres)

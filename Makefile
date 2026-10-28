@@ -1,4 +1,4 @@
-.PHONY: help install dev test lint format typecheck check e2e up down
+.PHONY: help install dev test test-postgres lint format typecheck check e2e up down
 
 help:  ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-10s %s\n", $$1, $$2}'
@@ -21,6 +21,9 @@ format:  ## Format code
 
 typecheck:  ## Type-check
 	uv run mypy src tests scripts
+
+test-postgres:  ## Run the test suite on PostgreSQL. Set TEST_POSTGRES_URL to a server you can create databases on
+	uv run pytest -q
 
 check: lint typecheck test  ## Everything CI runs before Docker
 

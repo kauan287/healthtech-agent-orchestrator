@@ -10,6 +10,7 @@ A FastAPI service that reviews prescriptions with two LangGraph agents and a doc
 A triage agent proposes a medication, a safety agent checks it against the patient's allergies, and the prescription then waits until a doctor approves or rejects it.
 Every step is written to an audit chain signed with HMAC-SHA256, and every read verifies that chain.
 If someone edits the database by hand, the API withholds the prescription's clinical data and reports `audit_chain_valid: false`, so the companion dispenser refuses to release the medication.
+The clinical text is in Spanish because the demo targets Spanish-speaking clinics. That covers the prompts, the demo rule table, and the sample requests. Code, API fields, and error messages are in English.
 
 ```mermaid
 sequenceDiagram
@@ -24,65 +25,32 @@ sequenceDiagram
     API->>G: invoke()
     G->>G: triage_agent, then safety_agent
     G-->>API: 2 signed audit entries
-    API->>DB: row with sealed head + 2 audit entries
+    API->>DB: row with signed chain head + 2 audit entries
     API-->>D: 201, status PENDING_APPROVAL
 
     D->>API: POST /api/v1/prescriptions/{thread_id}/approve
     API->>DB: verify the chain
-    API->>DB: move the sealed head, add the 3rd signed entry
+    API->>DB: move the chain head, add the 3rd signed entry
     API-->>D: 200, status APPROVED
 
     SD->>API: GET /api/v1/prescriptions/{thread_id}
-    API->>DB: load the chain, verify signatures and the sealed head
+    API->>DB: load the chain, verify the signatures and the head
     API-->>SD: human_approved, safety_approved, audit_chain_valid
 ```
 
-## Part of a two-service MedTech demo
+## What this project shows
 
-This repository is one half of an end-to-end prescription pipeline.
-[SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) runs the medication vending machines.
-It calls `GET /api/v1/prescriptions/session-{prescription_id}` on this service and dispenses only when the doctor approved, the safety agent passed, and the audit chain verifies.
-
-| Service | Stack | Responsibility |
-|---|---|---|
-| HealthTech Agent Orchestrator (this repository) | Python, FastAPI, LangGraph, PostgreSQL | AI triage, allergy check, doctor sign-off, signed audit trail |
-| [SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) | C#, ASP.NET Core, SignalR, Blazor | Payment webhooks, machine control, live dashboard |
-
-`tests/test_api.py::test_response_keeps_the_fields_smartdispenser_reads` pins the fields that SmartDispenser deserializes.
-New fields are safe to add. Renaming or removing one breaks the dispenser.
-
-### Run both services together
-
-`scripts/ecosystem_e2e.py` drives the whole pipeline across both services. It plays a vending machine over SignalR, gets a prescription approved here, pays through SmartDispenser's signed webhook, and checks that the machine receives the medication. It also checks that SmartDispenser refuses a pending, a rejected, and a tampered prescription.
-You need [uv](https://docs.astral.sh/uv/) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). Start each service in its own terminal:
-
-```bash
-# this repository
-ENVIRONMENT=development LLM_PROVIDER=demo DATABASE_URL=sqlite:////tmp/ecosystem.db \
-	uv run uvicorn src.server:app --port 8000
-
-# smartdispenser-core
-HealthTechApi__BaseUrl=http://localhost:8000 dotnet run --project src/SmartDispenser.API
-```
-
-Then run the check from this repository:
-
-```bash
-uv run --with websockets python scripts/ecosystem_e2e.py \
-	http://localhost:8000 http://localhost:5000 local-development-secret-not-for-production /tmp/ecosystem.db
-# ...
-# ok   machine told what to release: ('…', 'Paracetamol')
-# ok   dispense completed: 'Completed'
-# ok   tampered prescription is refused: (422, 'Audit chain integrity check failed: possible data tampering.')
-# PASS ecosystem e2e
-```
-
-CI does not run this script, because it needs both repositories. Each repository's CI checks its own side of the contract.
+- Two LangGraph agents behind a `ClinicalModel` protocol (`src/graph.py`, `src/clinical.py`). A deterministic demo model replaces the LLM, so the tests, CI, and `docker compose up` run the real workflow without an API key.
+- An HMAC-SHA256 audit chain in about 100 lines (`src/audit.py`). Tests prove that it catches an edited field, a deleted or reordered entry, a rewound head, and a chain copied from another prescription.
+- Reads that trust only verified, signed entries (`src/prescription.py`). A tampered prescription comes back as `INVALID` with every clinical field set to null.
+- A doctor's decision that is a compare-and-swap on the signed chain head. Of two concurrent decisions, exactly one is recorded, and the tests check that on SQLite and on PostgreSQL.
+- CI that runs ruff, `mypy --strict`, and 50 tests on SQLite and PostgreSQL. It then starts the Docker Compose stack, restarts the API while a prescription waits for the doctor, and edits an audit row with `psql` to check that the API reports the tampering.
+- A second service in C# that consumes this API. [SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) releases a medication only for an approved prescription whose chain verifies.
 
 ## Run it
 
 You need Docker. If you ran an earlier version, delete its database volume first with `docker compose down -v`, because the schema changed and `create_all` does not migrate it.
-No API key is required: by default the stack uses `LLM_PROVIDER=demo`, a deterministic rule table that stands in for the LLM.
+No API key is required. By default the stack uses `LLM_PROVIDER=demo`, a deterministic rule table that stands in for the LLM.
 
 ```bash
 git clone https://github.com/kauan287/healthtech-agent-orchestrator.git
@@ -153,7 +121,7 @@ cp .env.example .env
 uv run uvicorn src.server:app --reload
 ```
 
-Local runs use SQLite (`healthtech.db`). Without a `.env` file the app starts in production mode and refuses to run on the development signing key.
+Local runs use SQLite (`healthtech.db`). Without a `.env` file, the app uses its production defaults, `LLM_PROVIDER=groq` and `ENVIRONMENT=production`. It then refuses to start until you set `GROQ_API_KEY` and an `AUDIT_SIGNING_KEY` of at least 32 characters.
 
 ## API
 
@@ -167,6 +135,46 @@ Local runs use SQLite (`healthtech.db`). Without a `.env` file the app starts in
 | `GET /health/ready` | Readiness. Runs `SELECT 1` on the database. |
 
 `thread_id` is always `session-{prescription_id}`. A `prescription_id` may contain letters, digits, `.`, `_`, and `-`.
+
+## Run both services together
+
+This repository is one half of an end-to-end prescription pipeline.
+[SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) runs the medication vending machines.
+It calls `GET /api/v1/prescriptions/session-{prescription_id}` on this service and dispenses only when the doctor approved, the safety agent passed, and the audit chain verifies.
+
+| Service | Stack | Responsibility |
+|---|---|---|
+| HealthTech Agent Orchestrator (this repository) | Python, FastAPI, LangGraph, PostgreSQL | AI triage, allergy check, doctor sign-off, signed audit trail |
+| [SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) | C#, ASP.NET Core, SignalR, Blazor | Payment webhooks, machine control, live dashboard |
+
+`tests/test_api.py::test_response_keeps_the_fields_smartdispenser_reads` pins the fields that SmartDispenser deserializes.
+New fields are safe to add. Renaming or removing one breaks the dispenser.
+
+`scripts/ecosystem_e2e.py` drives the whole pipeline across both services. It plays a vending machine over SignalR, gets a prescription approved here, pays through SmartDispenser's signed webhook, and checks that the machine receives the medication. It also checks that SmartDispenser refuses a pending, a rejected, and a tampered prescription.
+You need [uv](https://docs.astral.sh/uv/) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). Start each service in its own terminal:
+
+```bash
+# this repository
+ENVIRONMENT=development LLM_PROVIDER=demo DATABASE_URL=sqlite:////tmp/ecosystem.db \
+	uv run uvicorn src.server:app --port 8000
+
+# smartdispenser-core
+HealthTechApi__BaseUrl=http://localhost:8000 dotnet run --project src/SmartDispenser.API
+```
+
+Then run the check from this repository:
+
+```bash
+uv run --with websockets python scripts/ecosystem_e2e.py \
+	http://localhost:8000 http://localhost:5000 local-development-secret-not-for-production /tmp/ecosystem.db
+# ...
+# ok   machine told what to release: ('…', 'Paracetamol')
+# ok   dispense completed: 'Completed'
+# ok   tampered prescription is refused: (422, 'Audit chain integrity check failed: possible data tampering.')
+# PASS ecosystem e2e
+```
+
+CI does not run this script, because it needs both repositories. Each repository's CI checks its own side of the contract.
 
 ## Configuration
 
@@ -186,7 +194,7 @@ Each audit entry stores its step, action, timestamp, details, and the MAC of the
 The entry's own MAC is HMAC-SHA256 over that content plus the `prescription_id`.
 The `details` column holds the exact canonical JSON text that the MAC signs, so a malformed value fails verification like any other edit.
 The `prescriptions` row stores the last entry's MAC as `head_hash`, with a `seal` that is an HMAC of the head.
-`src/audit.py` holds the whole mechanism in under 100 lines.
+`src/audit.py` holds the whole mechanism in about 100 lines.
 
 `verify_chain` walks the entries in order and checks each link and each MAC.
 The tests in `tests/test_audit.py` and `tests/test_api.py` prove that it catches these changes:
@@ -201,7 +209,7 @@ The API never trusts a table column for a clinical fact.
 `read_prescription` in `src/prescription.py` verifies the chain and checks that its steps are triage, safety, and at most one doctor decision. Only then does it read the proposal, the safety verdict, and the decision from the signed entries.
 If any check fails, the response has status `INVALID`, every clinical field is null, and `safety_approved` is false. A reader cannot act on forged data even if it ignores `audit_chain_valid`.
 Deleting the doctor's entry reads as `INVALID`, and the API refuses a new decision on an invalid chain. The one exception is the replay of a saved seal, described below.
-A decision is a compare-and-swap on `head_hash`. Of two concurrent decisions, exactly one moves the head, on Postgres and on SQLite, and the other gets 409.
+A decision is a compare-and-swap on `head_hash`. Of two concurrent decisions, exactly one moves the head and the other gets 409. The test suite checks this on SQLite and on PostgreSQL.
 `PrescriptionRepository.snapshot` reads the head before and after the chain, so a reader never pairs the chain from one commit with the head from another and reports a healthy prescription as tampered.
 
 The chain cannot help in three cases. They hold for any MAC whose key the application must keep.
@@ -225,13 +233,16 @@ Someone who can call the API can approve prescriptions, because the API has no a
 
 ```bash
 make check   # ruff, mypy --strict on src, tests, and scripts, pytest with coverage
+TEST_POSTGRES_URL=postgresql+psycopg://postgres@localhost:5432/postgres make test-postgres
 make up      # Postgres and the API in Docker Compose
 make e2e     # scripts/e2e.py against the Compose stack, with an API restart
 ```
 
+With `TEST_POSTGRES_URL` set, each test gets its own new PostgreSQL database, and the fixture drops it afterwards.
+
 CI (`.github/workflows/ci.yml`) runs two jobs on every pull request and every push to `master`:
 
-1. `check` runs lint, format, type checks, and the test suite.
+1. `check` runs lint, format, and type checks. It runs the test suite on SQLite, then again on a PostgreSQL 16 service container.
 2. `e2e` starts Postgres and the API with Docker Compose, runs `scripts/e2e.py` with a restart in the middle, then edits an audit row with `psql` and asserts that the API returns status `INVALID` with no clinical data.
 
 ## Project layout
@@ -246,7 +257,7 @@ src/
 ├── db.py            SQLAlchemy models and PrescriptionRepository
 ├── api_schemas.py   Request and response models
 └── config.py        Settings and startup validation
-tests/               pytest suite, runs the real app on a temporary SQLite database
+tests/               pytest suite, runs the real app on a new SQLite or PostgreSQL database per test
 scripts/e2e.py       HTTP end-to-end check, standard library only
 scripts/ecosystem_e2e.py  End-to-end check across this service and SmartDispenser Core
 ```
