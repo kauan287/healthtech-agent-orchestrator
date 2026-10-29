@@ -1,13 +1,75 @@
 {
-  "_note": "Reference table for an engineering benchmark. Synthetic, written by the author, not clinically validated. An allergy term blocks every active ingredient listed under it. Names are normalised (lowercase, no accents) before matching.",
+  "_note": "Reference table for an engineering benchmark. Synthetic, written by the author, not clinically validated. An allergy term blocks every active ingredient listed under it. Names are normalised (lowercase, no accents) before matching. Metamizol (dipirona) is a pyrazolone, not a classic NSAID, but it can cross-react in NSAID hypersensitivity, so the table blocks it with the NSAIDs as the conservative choice.",
   "families": {
-    "aines": ["ibuprofeno", "naproxeno", "diclofenaco", "dexketoprofeno", "acido acetilsalicilico", "aspirina", "ketorolaco", "ibuprofen", "naproxen", "diclofenac", "aspirin"],
-    "penicilinas": ["penicilina", "amoxicilina", "amoxicilina/acido clavulanico", "amoxicilina-clavulanico", "ampicilina", "cloxacilina", "penicillin", "amoxicillin", "ampicillin"],
-    "macrolidos": ["azitromicina", "claritromicina", "eritromicina", "azithromycin", "clarithromycin", "erythromycin"],
-    "sulfamidas": ["cotrimoxazol", "sulfametoxazol", "trimetoprim/sulfametoxazol", "sulfamethoxazole"],
-    "opioides": ["codeina", "tramadol", "morfina", "oxicodona", "fentanilo", "codeine", "morphine", "oxycodone"],
-    "antihistaminicos": ["loratadina", "desloratadina", "cetirizina", "levocetirizina", "ebastina", "bilastina", "dexclorfeniramina", "loratadine", "cetirizine"],
-    "paracetamol": ["paracetamol", "acetaminofen", "acetaminofeno", "acetaminophen"]
+    "aines": [
+      "ibuprofeno",
+      "naproxeno",
+      "diclofenaco",
+      "dexketoprofeno",
+      "acido acetilsalicilico",
+      "aspirina",
+      "ketorolaco",
+      "ibuprofen",
+      "naproxen",
+      "diclofenac",
+      "aspirin",
+      "metamizol",
+      "dipirona",
+      "metamizole",
+      "dipyrone"
+    ],
+    "penicilinas": [
+      "penicilina",
+      "amoxicilina",
+      "amoxicilina/acido clavulanico",
+      "amoxicilina-clavulanico",
+      "ampicilina",
+      "cloxacilina",
+      "penicillin",
+      "amoxicillin",
+      "ampicillin"
+    ],
+    "macrolidos": [
+      "azitromicina",
+      "claritromicina",
+      "eritromicina",
+      "azithromycin",
+      "clarithromycin",
+      "erythromycin"
+    ],
+    "sulfamidas": [
+      "cotrimoxazol",
+      "sulfametoxazol",
+      "trimetoprim/sulfametoxazol",
+      "sulfamethoxazole"
+    ],
+    "opioides": [
+      "codeina",
+      "tramadol",
+      "morfina",
+      "oxicodona",
+      "fentanilo",
+      "codeine",
+      "morphine",
+      "oxycodone"
+    ],
+    "antihistaminicos": [
+      "loratadina",
+      "desloratadina",
+      "cetirizina",
+      "levocetirizina",
+      "ebastina",
+      "bilastina",
+      "dexclorfeniramina",
+      "loratadine",
+      "cetirizine"
+    ],
+    "paracetamol": [
+      "paracetamol",
+      "acetaminofen",
+      "acetaminofeno",
+      "acetaminophen"
+    ]
   },
   "aliases": {
     "antiinflamatorios no esteroideos": "aines",
