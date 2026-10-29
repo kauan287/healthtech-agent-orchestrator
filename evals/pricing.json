@@ -1,0 +1,10 @@
+{
+  "source": "https://console.groq.com/docs/models",
+  "checked": "2026-10-28",
+  "unit": "USD per 1M tokens",
+  "models": {
+    "demo": {"input_usd_per_1m": 0, "output_usd_per_1m": 0},
+    "groq:openai/gpt-oss-120b": {"input_usd_per_1m": 0.15, "output_usd_per_1m": 0.60},
+    "groq:openai/gpt-oss-20b": {"input_usd_per_1m": 0.075, "output_usd_per_1m": 0.30}
+  }
+}

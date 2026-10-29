@@ -10,7 +10,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.records import EVALS_DIR, ProbeRecord, Run, SafetyProbe, TriageCase, TriageRecord
+from evals.records import (
+    EVALS_DIR,
+    ProbeRecord,
+    Run,
+    SafetyCall,
+    SafetyProbe,
+    TriageCall,
+    TriageCase,
+    TriageRecord,
+)
 from evals.reference import conflicts, matches_any
 
 PRICING_PATH = EVALS_DIR / "pricing.json"
@@ -66,6 +75,12 @@ class Price:
 
 
 @dataclass(frozen=True)
+class Tokens:
+    input: float
+    output: float
+
+
+@dataclass(frozen=True)
 class Failure:
     case_id: str
     explanation: str
@@ -85,7 +100,7 @@ class ModelMetrics:
     errors: Ratio  # failed calls / calls
     triage_latency: Latency
     safety_latency: Latency
-    mean_tokens_per_prescription: tuple[float, float] | None  # (input, output)
+    mean_tokens_per_prescription: Tokens | None
     cost_per_1k_usd: float | None
     failures: tuple[Failure, ...]
 
@@ -122,7 +137,9 @@ def score(run: Run, cases: Sequence[TriageCase | SafetyProbe], price: Price | No
 
     for record in run.records:
         case = by_id[record.case_id]
-        calls_in_record = [record.safety] if isinstance(record, ProbeRecord) else [record.triage]
+        calls_in_record: list[TriageCall | SafetyCall] = (
+            [record.safety] if isinstance(record, ProbeRecord) else [record.triage]
+        )
         if isinstance(record, TriageRecord) and record.safety is not None:
             calls_in_record.append(record.safety)
         for call in calls_in_record:
@@ -150,6 +167,12 @@ def score(run: Run, cases: Sequence[TriageCase | SafetyProbe], price: Price | No
             continue
 
         assert isinstance(record, TriageRecord) and isinstance(case, TriageCase)
+        prescription_tokens.append(
+            (
+                record.triage.input_tokens + (record.safety.input_tokens if record.safety else 0),
+                record.triage.output_tokens + (record.safety.output_tokens if record.safety else 0),
+            )
+        )
         proposal = record.triage.output
         if proposal is None:
             failures.append(Failure(case.id, f"triage call failed: {record.triage.error}"))
@@ -202,12 +225,6 @@ def score(run: Run, cases: Sequence[TriageCase | SafetyProbe], price: Price | No
 
         if record.safety is not None and record.safety.output is not None:
             safety_ms.append(record.safety.latency_ms)
-            prescription_tokens.append(
-                (
-                    record.triage.input_tokens + record.safety.input_tokens,
-                    record.triage.output_tokens + record.safety.output_tokens,
-                )
-            )
         if issues:
             failures.append(Failure(case.id, "; ".join(issues) + "."))
 
@@ -215,16 +232,16 @@ def score(run: Run, cases: Sequence[TriageCase | SafetyProbe], price: Price | No
     cost = None
     if prescription_tokens:
         n = len(prescription_tokens)
-        mean_tokens = (
-            sum(t[0] for t in prescription_tokens) / n,
-            sum(t[1] for t in prescription_tokens) / n,
+        mean_tokens = Tokens(
+            input=sum(t[0] for t in prescription_tokens) / n,
+            output=sum(t[1] for t in prescription_tokens) / n,
         )
         if price is not None:
             cost = (
                 1000
                 * (
-                    mean_tokens[0] * price.input_usd_per_1m
-                    + mean_tokens[1] * price.output_usd_per_1m
+                    mean_tokens.input * price.input_usd_per_1m
+                    + mean_tokens.output * price.output_usd_per_1m
                 )
                 / 1_000_000
             )

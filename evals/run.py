@@ -39,9 +39,10 @@ def build_model(spec: str) -> ClinicalModel:
     if spec == "demo":
         return DemoClinicalModel()
     if spec.startswith("groq:"):
-        return GroqClinicalModel(
-            api_key=os.environ["GROQ_API_KEY"], model=spec.removeprefix("groq:")
-        )
+        key = os.environ.get("GROQ_API_KEY", "")
+        if not key:
+            raise SystemExit(f"{spec} needs GROQ_API_KEY in the environment.")
+        return GroqClinicalModel(api_key=key, model=spec.removeprefix("groq:"))
     raise ValueError(f"Unknown model {spec!r}. Use demo or groq:<model id>.")
 
 
@@ -125,9 +126,12 @@ def run_case(
 
 
 def run_model(
-    spec: str, cases: Sequence[TriageCase | SafetyProbe], caller: Caller, meta: RunMeta
+    spec: str,
+    model: ClinicalModel,
+    cases: Sequence[TriageCase | SafetyProbe],
+    caller: Caller,
+    meta: RunMeta,
 ) -> Run:
-    model = build_model(spec)
     records = []
     for n, case in enumerate(cases, 1):
         record = run_case(model, case, caller)
@@ -166,10 +170,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     cases = load_cases(CASES_PATH)
     only = {i.strip() for i in args.only.split(",") if i.strip()}
     if only:
+        unknown = only - {c.id for c in cases}
+        if unknown:
+            raise SystemExit(f"Unknown case ids: {', '.join(sorted(unknown))}")
         cases = [c for c in cases if c.id in only]
-    for spec in (m.strip() for m in args.models.split(",") if m.strip()):
+    specs = [m.strip() for m in args.models.split(",") if m.strip()]
+    models = {spec: build_model(spec) for spec in specs}
+    for spec, model in models.items():
         caller = Caller(rpm=None if spec == "demo" else args.rpm)
-        run = run_model(spec, cases, caller, make_meta(spec, CASES_PATH))
+        run = run_model(spec, model, cases, caller, make_meta(spec, CASES_PATH))
         path = RUNS_DIR / f"{slug(spec)}.jsonl"
         dump_run(run, path)
         print(f"[{spec}] wrote {path}")
