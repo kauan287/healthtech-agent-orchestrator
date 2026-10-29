@@ -67,6 +67,7 @@ def main() -> None:
             "resourceType": "Patient",
             "meta": {"tag": [SYNTHETIC_TAG]},
             "name": [{"family": "Test", "given": ["Synthetic"], "text": "Synthetic Test"}],
+            "identifier": [{"system": "urn:healthtech:synthetic-run", "value": uuid.uuid4().hex}],
         },
     )
     allergy = create(
