@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import NonNegativeInt, model_validator
+from pydantic import NonNegativeInt, PositiveFloat, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_AUDIT_SIGNING_KEY = "dev-only-audit-signing-key-change-me"
@@ -31,6 +31,10 @@ class Settings(BaseSettings):
 
     # Comma-separated browser origins allowed to call the API, e.g. https://console.example.com.
     CORS_ORIGINS: str = ""
+
+    # Base URL of an HL7 FHIR R4 server, e.g. https://hapi.fhir.org/baseR4. Empty turns FHIR off.
+    FHIR_BASE_URL: str = ""
+    FHIR_TIMEOUT_SECONDS: PositiveFloat = 10
 
     @property
     def cors_origins(self) -> list[str]:
