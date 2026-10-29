@@ -32,6 +32,8 @@ class Status(StrEnum):
 class SignedTriage(TriageRecommendation):
     patient_symptoms: str
     patient_allergies: list[str]
+    fhir_patient: str | None = None
+    fhir_allergy_ids: list[str] | None = None
 
 
 class DoctorDecision(BaseModel):

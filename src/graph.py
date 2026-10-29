@@ -13,6 +13,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from src.audit import AuditEntry, new_entry
 from src.clinical import ClinicalModel, TriageRecommendation
+from src.fhir import FhirPatientContext
 from src.prescription import Step
 
 
@@ -20,6 +21,7 @@ class PipelineState(TypedDict, total=False):
     prescription_id: str
     patient_symptoms: str
     patient_allergies: list[str]
+    fhir: FhirPatientContext
     triage: TriageRecommendation
     audit_logs: Annotated[list[AuditEntry], operator.add]
 
@@ -44,6 +46,9 @@ def build_pipeline(model: ClinicalModel, signing_key: bytes) -> Pipeline:
             "patient_allergies": state["patient_allergies"],
             **triage.model_dump(),
         }
+        if "fhir" in state:
+            details["fhir_patient"] = state["fhir"].patient_reference
+            details["fhir_allergy_ids"] = [a.resource_id for a in state["fhir"].allergies]
         return {"triage": triage, "audit_logs": [audit(state, Step.TRIAGE, details)]}
 
     def safety_agent(state: PipelineState) -> PipelineState:

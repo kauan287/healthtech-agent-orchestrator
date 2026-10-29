@@ -32,6 +32,7 @@ NO_FACTS = {
     "urgency_level": None,
     "triage_reasoning": None,
     "created_at": None,
+    "fhir_patient": None,
 }
 
 
@@ -84,6 +85,7 @@ def test_agents_propose_and_wait_for_the_doctor(
         "urgency_level": "MEDIO",
         "triage_reasoning": "Analgésico y antipirético de primera línea.",
         "created_at": "2026-03-14T09:30:00+00:00",
+        "fhir_patient": None,
     }
     assert create(client) == expected
     assert read(client) == expected

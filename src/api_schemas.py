@@ -2,6 +2,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, Field
 
+from src.fhir import FHIR_ID_PATTERN
 from src.prescription import Status
 
 
@@ -16,14 +17,22 @@ def _storable(value: str) -> str:
 
 
 Text = Annotated[str, AfterValidator(_storable)]
+PrescriptionId = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")]
+Symptoms = Annotated[Text, Field(min_length=1, max_length=5000)]
 
 
 class CreatePrescriptionRequest(BaseModel):
-    prescription_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
-    patient_symptoms: Text = Field(min_length=1, max_length=5000)
+    prescription_id: PrescriptionId
+    patient_symptoms: Symptoms
     patient_allergies: list[Annotated[Text, Field(min_length=1, max_length=200)]] = Field(
         default_factory=list, max_length=50
     )
+
+
+class CreateFromFhirRequest(BaseModel):
+    prescription_id: PrescriptionId
+    fhir_patient_id: str = Field(pattern=FHIR_ID_PATTERN)
+    patient_symptoms: Symptoms
 
 
 class DoctorApprovalRequest(BaseModel):
@@ -50,6 +59,9 @@ class PrescriptionResponse(BaseModel):
     urgency_level: Literal["ALTO", "MEDIO", "BAJO"] | None
     triage_reasoning: str | None
     created_at: str | None = Field(description="When the triage agent signed its entry, ISO 8601.")
+    fhir_patient: str | None = Field(
+        description="The FHIR Patient the allergies were read from, e.g. Patient/123. Signed.",
+    )
 
 
 class PrescriptionListResponse(BaseModel):

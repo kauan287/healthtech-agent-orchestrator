@@ -9,13 +9,16 @@ import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -24,6 +27,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from src.api_schemas import (
     AuditEntryResponse,
     AuditTrailResponse,
+    CreateFromFhirRequest,
     CreatePrescriptionRequest,
     DoctorApprovalRequest,
     PrescriptionListResponse,
@@ -33,18 +37,23 @@ from src.audit import new_entry, seal_head
 from src.clinical import build_clinical_model
 from src.config import Settings, get_settings
 from src.db import Base, PrescriptionRepository, StoredChain
-from src.graph import Pipeline, build_pipeline
+from src.fhir import FhirClient, FhirPatientContext, FhirPatientNotFound, FhirUnavailable
+from src.fhir_export import prescription_bundle
+from src.graph import Pipeline, PipelineState, build_pipeline
 from src.prescription import DoctorDecision, Prescription, Status, Step, read_prescription
 from src.rate_limit import FixedWindowLimiter
 
 VERSION = "1.1.0"
 THREAD_PREFIX = "session-"
+FHIR_JSON = "application/fhir+json"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def create_api(settings: Settings | None = None) -> FastAPI:
+def create_api(
+    settings: Settings | None = None, fhir_transport: httpx.BaseTransport | None = None
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolved = settings or get_settings()
@@ -62,10 +71,20 @@ def create_api(settings: Settings | None = None) -> FastAPI:
         )
         app.state.client_ip_header = resolved.CLIENT_IP_HEADER
         app.state.cors_origins = resolved.cors_origins
+        app.state.fhir = (
+            FhirClient(resolved.FHIR_BASE_URL, resolved.FHIR_TIMEOUT_SECONDS, fhir_transport)
+            if resolved.FHIR_BASE_URL
+            else None
+        )
         logger.info(
-            "Ready: llm=%s, database=%s", resolved.LLM_PROVIDER, engine.url.get_backend_name()
+            "Ready: llm=%s, database=%s, fhir=%s",
+            resolved.LLM_PROVIDER,
+            engine.url.get_backend_name(),
+            resolved.FHIR_BASE_URL or "off",
         )
         yield
+        if app.state.fhir is not None:
+            app.state.fhir.close()
         engine.dispose()
 
     app = FastAPI(
@@ -151,6 +170,13 @@ def _signing_key(request: Request) -> bytes:
     return key
 
 
+def _fhir(request: Request) -> FhirClient:
+    fhir: FhirClient | None = request.app.state.fhir
+    if fhir is None:
+        raise HTTPException(503, "FHIR server not configured.")
+    return fhir
+
+
 def _prescription_id(thread_id: str) -> str:
     if not thread_id.startswith(THREAD_PREFIX):
         raise HTTPException(404, "Prescription not found.")
@@ -159,6 +185,7 @@ def _prescription_id(thread_id: str) -> str:
 
 Repo = Annotated[PrescriptionRepository, Depends(_repo)]
 SigningKey = Annotated[bytes, Depends(_signing_key)]
+AgentPipeline = Annotated[Pipeline, Depends(_pipeline)]
 
 
 def _stored(repo: PrescriptionRepository, prescription_id: str) -> StoredChain:
@@ -196,6 +223,7 @@ def _response(prescription_id: str, rx: Prescription) -> PrescriptionResponse:
         urgency_level=rx.triage.urgency_level if rx.triage else None,
         triage_reasoning=rx.triage.reasoning if rx.triage else None,
         created_at=rx.created_at,
+        fhir_patient=rx.triage.fhir_patient if rx.triage else None,
     )
 
 
@@ -219,23 +247,71 @@ def ready(repo: Repo) -> dict[str, str]:
     responses={409: {"description": "A prescription with this id already exists."}},
 )
 def create_prescription(
-    req: CreatePrescriptionRequest,
+    req: CreatePrescriptionRequest, repo: Repo, pipeline: AgentPipeline, key: SigningKey
+) -> PrescriptionResponse:
+    return _create(req, repo, pipeline, key)
+
+
+@router.post(
+    "/api/v1/prescriptions/from-fhir",
+    response_model=PrescriptionResponse,
+    status_code=201,
+    tags=["Prescriptions", "FHIR"],
+    summary="Read the patient's allergies from the FHIR server, then run the agents",
+    responses={
+        409: {"description": "A prescription with this id already exists."},
+        422: {"description": "The FHIR patient does not exist."},
+        502: {"description": "The FHIR server failed or answered with something other than FHIR."},
+        503: {"description": "No FHIR server is configured."},
+    },
+)
+def create_prescription_from_fhir(
+    req: CreateFromFhirRequest,
     repo: Repo,
-    pipeline: Annotated[Pipeline, Depends(_pipeline)],
+    pipeline: AgentPipeline,
     key: SigningKey,
+    fhir: Annotated[FhirClient, Depends(_fhir)],
+) -> PrescriptionResponse:
+    try:
+        context = fhir.patient_context(req.fhir_patient_id)
+    except FhirPatientNotFound:
+        raise HTTPException(422, f"FHIR patient {req.fhir_patient_id} not found.") from None
+    except FhirUnavailable as error:
+        logger.warning("FHIR read failed: %s", error)
+        raise HTTPException(502, "FHIR server unavailable.") from None
+    try:
+        intake = CreatePrescriptionRequest(
+            prescription_id=req.prescription_id,
+            patient_symptoms=req.patient_symptoms,
+            patient_allergies=[allergy.text for allergy in context.allergies],
+        )
+    except ValidationError:
+        raise HTTPException(
+            422, f"The allergies of {context.patient_reference} exceed the prescription limits."
+        ) from None
+    return _create(intake, repo, pipeline, key, context)
+
+
+def _create(
+    req: CreatePrescriptionRequest,
+    repo: PrescriptionRepository,
+    pipeline: Pipeline,
+    key: bytes,
+    fhir: FhirPatientContext | None = None,
 ) -> PrescriptionResponse:
     conflict = HTTPException(409, f"Prescription {req.prescription_id} already exists.")
     with repo.session.begin():
         if repo.head(req.prescription_id) is not None:
             raise conflict
 
-    chain = pipeline.invoke(
-        {
-            "prescription_id": req.prescription_id,
-            "patient_symptoms": req.patient_symptoms,
-            "patient_allergies": req.patient_allergies,
-        }
-    )["audit_logs"]
+    intake: PipelineState = {
+        "prescription_id": req.prescription_id,
+        "patient_symptoms": req.patient_symptoms,
+        "patient_allergies": req.patient_allergies,
+    }
+    if fhir is not None:
+        intake["fhir"] = fhir
+    chain = pipeline.invoke(intake)["audit_logs"]
 
     try:
         with repo.session.begin():
@@ -337,6 +413,27 @@ def get_audit_trail(thread_id: str, repo: Repo, key: SigningKey) -> AuditTrailRe
             for entry in stored.chain
         ],
     )
+
+
+@router.get(
+    "/api/v1/prescriptions/{thread_id}/fhir",
+    response_class=Response,
+    tags=["Prescriptions", "FHIR"],
+    summary="Export the prescription as a FHIR R4 Bundle with a signed Provenance",
+    responses={
+        200: {"content": {FHIR_JSON: {}}},
+        404: {"description": "Prescription not found."},
+        409: {"description": "The audit chain is invalid."},
+    },
+)
+def export_fhir(thread_id: str, repo: Repo, key: SigningKey) -> Response:
+    prescription_id = _prescription_id(thread_id)
+    stored = _stored(repo, prescription_id)
+    rx = _read(stored, prescription_id, key)
+    if not rx.audit_valid:
+        raise HTTPException(409, "Audit chain is invalid; the prescription is not exported.")
+    bundle = prescription_bundle(prescription_id, rx, stored.chain[-1], datetime.now(UTC))
+    return Response(bundle.model_dump_json(exclude_none=True), media_type=FHIR_JSON)
 
 
 app = create_api()
