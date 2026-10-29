@@ -46,8 +46,9 @@ sequenceDiagram
 - An HMAC-SHA256 audit chain in about 100 lines (`src/audit.py`). Tests prove that it catches an edited field, a deleted or reordered entry, a rewound head, and a chain copied from another prescription.
 - Reads that trust only verified, signed entries (`src/prescription.py`). A tampered prescription comes back as `INVALID` with every clinical field set to null.
 - A doctor's decision that is a compare-and-swap on the signed chain head. Of two concurrent decisions, exactly one is recorded, and the tests check that on SQLite and on PostgreSQL.
-- CI that runs ruff, `mypy --strict`, and 50 tests on SQLite and PostgreSQL. It then starts the Docker Compose stack, restarts the API while a prescription waits for the doctor, and edits an audit row with `psql` to check that the API reports the tampering.
+- CI that runs ruff, `mypy --strict`, and 124 tests on SQLite and PostgreSQL. It then starts the Docker Compose stack, restarts the API while a prescription waits for the doctor, and edits an audit row with `psql` to check that the API reports the tampering.
 - A React doctor console that consumes this API, with types generated from its OpenAPI schema and Playwright tests against the real service ([healthtech-doctor-console](https://github.com/kauan287/healthtech-doctor-console)).
+- HL7 FHIR R4 in both directions (`src/fhir.py`, `src/fhir_export.py`). Allergies come from a FHIR server's `AllergyIntolerance` resources, and a prescription exports as a `MedicationRequest` with a `Provenance` signed by the audit chain. An exported bundle passes HAPI FHIR's R4 `$validate` with no errors.
 - A second service in C# that consumes this API. [SmartDispenser Core](https://github.com/kauan287/smartdispenser-core) releases a medication only for an approved prescription whose chain verifies.
 
 ## Run it
