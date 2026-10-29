@@ -81,3 +81,23 @@ def test_no_acceptable_medication_conflicts_with_the_case_allergies() -> None:
         if conflicts(medication, c.allergies)
     ]
     assert clashes == []
+
+
+@pytest.mark.parametrize(
+    ("medication", "acceptable"),
+    [
+        ("Azithromycin", ["azitromicina"]),
+        ("Amoxicillin 500 mg", ["amoxicilina"]),
+        ("Acetaminophen", ["paracetamol"]),
+        ("Fluticasone propionate nasal spray", ["fluticasona"]),
+        ("Ibuprofen", ["ibuprofeno"]),
+    ],
+)
+def test_an_english_name_matches_its_spanish_ingredient(
+    medication: str, acceptable: list[str]
+) -> None:
+    assert matches_any(medication, acceptable)
+
+
+def test_a_synonym_does_not_match_a_different_drug() -> None:
+    assert not matches_any("Azithromycin", ["claritromicina", "paracetamol"])
