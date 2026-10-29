@@ -39,6 +39,11 @@ def _allergy_list(allergies: list[str]) -> str:
     return ", ".join(allergies) if allergies else "Ninguna"
 
 
+# Groq decodes these models under the JSON schema, so the reply always parses.
+# Other models fall back to tool calling, which they follow on a best-effort basis.
+STRICT_SCHEMA_MODELS = frozenset({"openai/gpt-oss-120b", "openai/gpt-oss-20b"})
+
+
 class GroqClinicalModel:
     def __init__(self, api_key: str, model: str) -> None:
         from langchain_groq import ChatGroq
@@ -46,8 +51,13 @@ class GroqClinicalModel:
         llm = ChatGroq(
             api_key=SecretStr(api_key), model=model, temperature=0, timeout=30, max_retries=2
         )
-        self._triage_llm = llm.with_structured_output(TriageRecommendation)
-        self._safety_llm = llm.with_structured_output(SafetyCheck)
+        method: Literal["json_schema", "function_calling"] = (
+            "json_schema" if model in STRICT_SCHEMA_MODELS else "function_calling"
+        )
+        self._triage_llm = llm.with_structured_output(
+            TriageRecommendation, method=method, strict=True
+        )
+        self._safety_llm = llm.with_structured_output(SafetyCheck, method=method, strict=True)
 
     def triage(self, symptoms: str, allergies: list[str]) -> TriageRecommendation:
         prompt = f"""

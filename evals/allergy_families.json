@@ -1,0 +1,28 @@
+{
+  "_note": "Reference table for an engineering benchmark. Synthetic, written by the author, not clinically validated. An allergy term blocks every active ingredient listed under it. Names are normalised (lowercase, no accents) before matching.",
+  "families": {
+    "aines": ["ibuprofeno", "naproxeno", "diclofenaco", "dexketoprofeno", "acido acetilsalicilico", "aspirina", "ketorolaco", "ibuprofen", "naproxen", "diclofenac", "aspirin"],
+    "penicilinas": ["penicilina", "amoxicilina", "amoxicilina/acido clavulanico", "amoxicilina-clavulanico", "ampicilina", "cloxacilina", "penicillin", "amoxicillin", "ampicillin"],
+    "macrolidos": ["azitromicina", "claritromicina", "eritromicina", "azithromycin", "clarithromycin", "erythromycin"],
+    "sulfamidas": ["cotrimoxazol", "sulfametoxazol", "trimetoprim/sulfametoxazol", "sulfamethoxazole"],
+    "opioides": ["codeina", "tramadol", "morfina", "oxicodona", "fentanilo", "codeine", "morphine", "oxycodone"],
+    "antihistaminicos": ["loratadina", "desloratadina", "cetirizina", "levocetirizina", "ebastina", "bilastina", "dexclorfeniramina", "loratadine", "cetirizine"],
+    "paracetamol": ["paracetamol", "acetaminofen", "acetaminofeno", "acetaminophen"]
+  },
+  "aliases": {
+    "antiinflamatorios no esteroideos": "aines",
+    "antiinflamatorios": "aines",
+    "nsaids": "aines",
+    "nsaid": "aines",
+    "betalactamicos": "penicilinas",
+    "penicillins": "penicilinas",
+    "macrolides": "macrolidos",
+    "sulfonamidas": "sulfamidas",
+    "sulfa": "sulfamidas",
+    "sulfonamides": "sulfamidas",
+    "opiaceos": "opioides",
+    "opioids": "opioides",
+    "antihistamines": "antihistaminicos",
+    "acetaminophen": "paracetamol"
+  }
+}

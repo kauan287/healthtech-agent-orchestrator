@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # "demo" is a deterministic rule table so the project runs without an API key.
     LLM_PROVIDER: Literal["groq", "demo"] = "groq"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
 
     # SQLAlchemy URL. sqlite:///... and postgresql+psycopg://... are supported.
     DATABASE_URL: str = "sqlite:///./healthtech.db"

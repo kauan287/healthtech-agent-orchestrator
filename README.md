@@ -199,7 +199,7 @@ uv run --with websockets python scripts/ecosystem_e2e.py \
 |---|---|---|
 | `LLM_PROVIDER` | `groq` (`demo` in `.env.example` and Compose) | `groq` calls the LLM. `demo` uses the rule table in `src/clinical.py`. |
 | `GROQ_API_KEY` | empty | Required when `LLM_PROVIDER=groq`. The app refuses to start without it. |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Any Groq chat model with tool calling. |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | A Groq chat model id. The gpt-oss models answer through strict JSON-schema output. Other models need tool calling. |
 | `DATABASE_URL` | `sqlite:///./healthtech.db` | `sqlite:///...` or `postgresql+psycopg://...` |
 | `AUDIT_SIGNING_KEY` | a development key | Signs the audit chain. With `ENVIRONMENT=production`, the app refuses to start on the development key or on a key shorter than 32 characters. |
 | `ENVIRONMENT` | `production` (`development` in `.env.example` and Compose) | `development`, `test`, or `production`. |
@@ -236,6 +236,17 @@ The chain cannot help in three cases. They hold for any MAC whose key the applic
 Someone who holds `AUDIT_SIGNING_KEY` can forge entries, so keep the key in a secret manager and out of the database. Entries carry no key id, so rotating the key invalidates every existing chain.
 Someone with write access who saved an earlier `head_hash` and `seal` pair, by reading the row before the decision or from a backup, can delete the later entries and put the old pair back. The prescription then verifies as pending again, and a new decision is possible. A seal stored in the same database cannot prevent that. Detecting it needs an anchor outside the database, such as a write-once log, or a database role for the app that cannot delete from `audit_logs`.
 Someone who can call the API can approve prescriptions, because the API has no authentication. A production deployment needs an identity provider in front of it, and the doctor's identity belongs in the signed decision.
+
+## Evaluate the agents
+
+`evals/` measures both agents on 48 labelled cases written by the author: 24 prescriptions through the full pipeline and 24 probes of the safety agent alone. It reports safety recall (the share of real allergy conflicts the safety agent flags), escapes (conflicting proposals that the safety check passes), red flags under-triaged, error rate, latency, tokens, and cost per 1,000 prescriptions. [`evals/REPORT.md`](evals/REPORT.md) holds the current results. It is an engineering benchmark, not a clinical validation.
+
+```bash
+make eval-demo                         # the demo model, no key needed
+GROQ_API_KEY=gsk_... make eval-groq    # openai/gpt-oss-120b and openai/gpt-oss-20b
+```
+
+CI reruns the demo model and fails if its answers differ from `evals/runs/demo.jsonl`, or if `evals/REPORT.md` is out of date. The **Evaluate agents** workflow runs the Groq models on demand with the `GROQ_API_KEY` repository secret.
 
 ## Design decisions
 

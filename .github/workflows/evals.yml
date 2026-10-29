@@ -1,0 +1,37 @@
+name: Evaluate agents
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: Comma-separated models, demo or groq:<model id>
+        default: groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b
+      rpm:
+        description: Groq calls per minute
+        default: "20"
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Run the agents over the benchmark
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          MODELS: ${{ inputs.models }}
+          RPM: ${{ inputs.rpm }}
+        run: uv run python -m evals.run --models "$MODELS" --rpm "$RPM"
+      - run: uv run python -m evals.report
+      - run: cat evals/REPORT.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: evaluation
+          path: |
+            evals/REPORT.md
+            evals/runs/
