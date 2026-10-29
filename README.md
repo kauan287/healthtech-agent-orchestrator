@@ -237,6 +237,17 @@ Someone who holds `AUDIT_SIGNING_KEY` can forge entries, so keep the key in a se
 Someone with write access who saved an earlier `head_hash` and `seal` pair, by reading the row before the decision or from a backup, can delete the later entries and put the old pair back. The prescription then verifies as pending again, and a new decision is possible. A seal stored in the same database cannot prevent that. Detecting it needs an anchor outside the database, such as a write-once log, or a database role for the app that cannot delete from `audit_logs`.
 Someone who can call the API can approve prescriptions, because the API has no authentication. A production deployment needs an identity provider in front of it, and the doctor's identity belongs in the signed decision.
 
+## Evaluate the agents
+
+`evals/` measures both agents on 48 labelled cases written by the author: 24 prescriptions through the full pipeline and 24 probes of the safety agent alone. It reports safety recall (the share of real allergy conflicts the safety agent flags), escapes (conflicting proposals that the safety check passes), red flags under-triaged, error rate, latency, tokens, and cost per 1,000 prescriptions. [`evals/REPORT.md`](evals/REPORT.md) holds the current results. It is an engineering benchmark, not a clinical validation.
+
+```bash
+make eval-demo                         # the demo model, no key needed
+GROQ_API_KEY=gsk_... make eval-groq    # openai/gpt-oss-120b and openai/gpt-oss-20b
+```
+
+CI runs `make eval-demo` and fails if the agents' behaviour changes without an updated report. The **Evaluate agents** workflow runs the Groq models on demand with the `GROQ_API_KEY` repository secret.
+
 ## Design decisions
 
 **The database is the system of record.** Each write runs in a short database transaction, the unique `prescription_id` rejects duplicates, and no write error is swallowed. A response never comes from in-memory graph state or from an unsigned column.

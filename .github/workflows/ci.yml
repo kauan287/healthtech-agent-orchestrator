@@ -28,14 +28,18 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run ruff check src tests scripts
-      - run: uv run ruff format --check src tests scripts
-      - run: uv run mypy src tests scripts
+      - run: uv run ruff check src tests scripts evals
+      - run: uv run ruff format --check src tests scripts evals
+      - run: uv run mypy src tests scripts evals
       - run: uv run pytest --cov=src --cov-report=term-missing
       - name: Tests on PostgreSQL
         run: uv run pytest -q
         env:
           TEST_POSTGRES_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+      - name: Agent behaviour matches the committed evaluation report
+        run: |
+          make eval-demo
+          git diff --exit-code -I '"utc":' -I '^| `demo` | `' -- evals/runs/demo.jsonl evals/REPORT.md
 
   e2e:
     name: Docker Compose end-to-end (Postgres)
