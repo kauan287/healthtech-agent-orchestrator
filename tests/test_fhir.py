@@ -1,10 +1,13 @@
+import base64
 import logging
 from collections.abc import Iterator
+from datetime import UTC, datetime, tzinfo
 from typing import Any
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from fhir.resources.R4B.bundle import Bundle
 from sqlalchemy import Engine, create_engine, text
 
 from src.config import Settings
@@ -12,6 +15,12 @@ from src.fhir import FhirAllergy, FhirClient, FhirPatientNotFound, FhirUnavailab
 from src.server import create_api
 
 BASE = "http://fhir.test/baseR4"
+
+
+class FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> "FrozenDatetime":
+        return cls(2026, 3, 14, 9, 30, tzinfo=UTC)
 
 
 P1: dict[str, Any] = {
@@ -277,3 +286,122 @@ def test_tampered_fhir_patient_reads_as_invalid(fhir_client: TestClient, fhir_db
         None,
         None,
     )
+
+
+EXPORTED_APPROVED: dict[str, Any] = {
+    "resourceType": "Bundle",
+    "type": "collection",
+    "entry": [
+        {
+            "fullUrl": "urn:uuid:10208174-51f4-5790-b132-1568ba7d52f1",
+            "resource": {
+                "resourceType": "MedicationRequest",
+                "identifier": [{"system": "urn:healthtech:prescription", "value": "RX-FHIR-1"}],
+                "status": "active",
+                "intent": "order",
+                "medicationCodeableConcept": {"text": "Paracetamol"},
+                "subject": {"reference": "Patient/p1"},
+                "authoredOn": "2026-03-14T09:30:00Z",
+                "note": [
+                    {
+                        "authorString": "Safety agent",
+                        "text": "Contraindicado: alergia a Paracetamol.",
+                    },
+                    {"authorString": "Doctor", "text": "Cambiar a metamizol."},
+                ],
+                "dosageInstruction": [{"text": "500 mg cada 8 horas"}],
+            },
+        },
+        {
+            "fullUrl": "urn:uuid:7f1fdc79-34fe-58f7-9ccb-dc949608fed4",
+            "resource": {
+                "resourceType": "Provenance",
+                "target": [{"reference": "urn:uuid:10208174-51f4-5790-b132-1568ba7d52f1"}],
+                "recorded": "2026-03-14T09:30:00Z",
+                "agent": [{"who": {"display": "HealthTech Agent Orchestrator"}}],
+                "signature": [
+                    {
+                        "type": [
+                            {
+                                "system": "urn:iso-astm:E1762-95:2013",
+                                "code": "1.2.840.10065.1.12.1.5",
+                                "display": "Verification Signature",
+                            }
+                        ],
+                        "when": "2026-03-14T09:30:00Z",
+                        "who": {"display": "HealthTech Agent Orchestrator"},
+                        "sigFormat": "application/hmac-sha256",
+                    }
+                ],
+            },
+        },
+    ],
+}
+
+
+def export(client: TestClient) -> Any:
+    response = client.get("/api/v1/prescriptions/session-RX-FHIR-1/fhir")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/fhir+json"
+    Bundle.model_validate_json(response.content)
+    return response.json()
+
+
+def test_export_maps_the_review_to_a_signed_medication_request(
+    fhir_client: TestClient, fhir_db: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("src.audit.datetime", FrozenDatetime)
+    monkeypatch.setattr("src.server.datetime", FrozenDatetime)
+    from_fhir(fhir_client)
+    pending = export(fhir_client)["entry"][0]["resource"]
+    assert (pending["status"], pending["intent"]) == ("draft", "proposal")
+
+    fhir_client.post(
+        "/api/v1/prescriptions/session-RX-FHIR-1/approve",
+        json={"approved": True, "doctor_comments": "Cambiar a metamizol."},
+    )
+    bundle = export(fhir_client)
+    with fhir_db.connect() as conn:
+        head = conn.execute(text("SELECT head_hash FROM prescriptions")).scalar_one()
+    signature = bundle["entry"][1]["resource"]["signature"][0]
+    assert base64.b64decode(signature.pop("data"), validate=True).hex() == head
+    assert bundle == EXPORTED_APPROVED
+
+
+def test_export_without_fhir_names_the_patient_by_prescription(client: TestClient) -> None:
+    client.post(
+        "/api/v1/prescriptions",
+        json={
+            "prescription_id": "RX-FHIR-1",
+            "patient_symptoms": "Fiebre",
+            "patient_allergies": [],
+        },
+    )
+    client.post(
+        "/api/v1/prescriptions/session-RX-FHIR-1/approve",
+        json={"approved": False, "doctor_comments": ""},
+    )
+    request = export(client)["entry"][0]["resource"]
+    assert (request["status"], request["intent"], request["subject"]) == (
+        "cancelled",
+        "proposal",
+        {"display": "Patient of RX-FHIR-1"},
+    )
+    assert request["note"] == [
+        {"authorString": "Safety agent", "text": "Sin conflictos con las alergias conocidas."}
+    ]
+
+
+def test_export_refuses_a_tampered_chain(fhir_client: TestClient, fhir_db: Engine) -> None:
+    from_fhir(fhir_client)
+    with fhir_db.begin() as conn:
+        conn.execute(text("UPDATE audit_logs SET details = replace(details, 'a1', 'a9')"))
+    response = fhir_client.get("/api/v1/prescriptions/session-RX-FHIR-1/fhir")
+    assert (response.status_code, response.json()) == (
+        409,
+        {"detail": "Audit chain is invalid; the prescription is not exported."},
+    )
+
+
+def test_export_of_an_unknown_prescription_is_not_found(fhir_client: TestClient) -> None:
+    assert fhir_client.get("/api/v1/prescriptions/session-nope/fhir").status_code == 404

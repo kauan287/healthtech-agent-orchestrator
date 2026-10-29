@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Annotated
 
 import httpx
@@ -37,12 +38,14 @@ from src.clinical import build_clinical_model
 from src.config import Settings, get_settings
 from src.db import Base, PrescriptionRepository, StoredChain
 from src.fhir import FhirClient, FhirPatientContext, FhirPatientNotFound, FhirUnavailable
+from src.fhir_export import prescription_bundle
 from src.graph import Pipeline, PipelineState, build_pipeline
 from src.prescription import DoctorDecision, Prescription, Status, Step, read_prescription
 from src.rate_limit import FixedWindowLimiter
 
 VERSION = "1.1.0"
 THREAD_PREFIX = "session-"
+FHIR_JSON = "application/fhir+json"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -410,6 +413,27 @@ def get_audit_trail(thread_id: str, repo: Repo, key: SigningKey) -> AuditTrailRe
             for entry in stored.chain
         ],
     )
+
+
+@router.get(
+    "/api/v1/prescriptions/{thread_id}/fhir",
+    response_class=Response,
+    tags=["Prescriptions", "FHIR"],
+    summary="Export the prescription as a FHIR R4 Bundle with a signed Provenance",
+    responses={
+        200: {"content": {FHIR_JSON: {}}},
+        404: {"description": "Prescription not found."},
+        409: {"description": "The audit chain is invalid."},
+    },
+)
+def export_fhir(thread_id: str, repo: Repo, key: SigningKey) -> Response:
+    prescription_id = _prescription_id(thread_id)
+    stored = _stored(repo, prescription_id)
+    rx = _read(stored, prescription_id, key)
+    if not rx.audit_valid:
+        raise HTTPException(409, "Audit chain is invalid; the prescription is not exported.")
+    bundle = prescription_bundle(prescription_id, rx, stored.chain[-1], datetime.now(UTC))
+    return Response(bundle.model_dump_json(exclude_none=True), media_type=FHIR_JSON)
 
 
 app = create_api()
