@@ -246,7 +246,7 @@ make eval-demo                         # the demo model, no key needed
 GROQ_API_KEY=gsk_... make eval-groq    # openai/gpt-oss-120b and openai/gpt-oss-20b
 ```
 
-CI runs `make eval-demo` and fails if the agents' behaviour changes without an updated report. The **Evaluate agents** workflow runs the Groq models on demand with the `GROQ_API_KEY` repository secret.
+CI reruns the demo model and fails if its answers differ from `evals/runs/demo.jsonl`, or if `evals/REPORT.md` is out of date. The **Evaluate agents** workflow runs the Groq models on demand with the `GROQ_API_KEY` repository secret.
 
 ## Design decisions
 

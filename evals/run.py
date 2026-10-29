@@ -131,6 +131,7 @@ def run_model(
     cases: Sequence[TriageCase | SafetyProbe],
     caller: Caller,
     meta: RunMeta,
+    log: Callable[[str], None] = print,
 ) -> Run:
     records = []
     for n, case in enumerate(cases, 1):
@@ -139,7 +140,7 @@ def run_model(
             [record.safety] if isinstance(record, ProbeRecord) else [record.triage, record.safety]
         )
         failed = [c.error for c in calls if c is not None and c.error]
-        print(f"[{spec}] {n}/{len(cases)} {case.id}" + (f" ERROR {failed[0]}" if failed else ""))
+        log(f"[{spec}] {n}/{len(cases)} {case.id}" + (f" ERROR {failed[0]}" if failed else ""))
         records.append(record)
     return Run(meta=meta, records=records)
 

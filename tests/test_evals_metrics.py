@@ -3,6 +3,7 @@ from typing import Literal
 
 import pytest
 
+from evals.drift import answers
 from evals.metrics import Price, Ratio, Tokens, percentile, score
 from evals.records import (
     CASES_PATH,
@@ -212,3 +213,12 @@ def test_the_committed_demo_run_parses() -> None:
     run = load_run(CASES_PATH.parent / "runs" / "demo.jsonl")
 
     assert (run.meta.model, len(run.records)) == ("demo", 48)
+
+
+def test_drift_compares_answers_and_ignores_latency() -> None:
+    slow = Run(meta=META, records=[ProbeRecord(case_id="P1", safety=safety(True, ms=900))])
+    fast = Run(meta=META, records=[ProbeRecord(case_id="P1", safety=safety(True, ms=1))])
+    flagged = Run(meta=META, records=[ProbeRecord(case_id="P1", safety=safety(False, ms=1))])
+
+    assert answers(slow) == answers(fast)
+    assert answers(slow) != answers(flagged)
