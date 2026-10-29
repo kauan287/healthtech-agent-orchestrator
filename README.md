@@ -135,6 +135,8 @@ Local runs use SQLite (`healthtech.db`). Without a `.env` file, the app uses its
 | `GET /api/v1/prescriptions/{thread_id}` | The prescription, read from the verified audit chain. Returns 404 if unknown. |
 | `POST /api/v1/prescriptions/{thread_id}/approve` | Records `{"approved": bool, "doctor_comments": str}`. Returns 409 if a decision exists or the audit chain is invalid. |
 | `GET /api/v1/prescriptions/{thread_id}/audit` | Every stored audit entry plus the verification result. If the chain is invalid, each `details` is null. |
+| `POST /api/v1/prescriptions/from-fhir` | Reads the patient's allergies from the FHIR server, then runs the create flow. Body `{"prescription_id", "fhir_patient_id", "patient_symptoms"}`. Returns 201, 409 like create, 422 for an unknown patient, 502 if the FHIR server fails, and 503 without `FHIR_BASE_URL`. |
+| `GET /api/v1/prescriptions/{thread_id}/fhir` | The prescription as a FHIR R4 `Bundle`, as `application/fhir+json`. Returns 404 if unknown and 409 if the audit chain is invalid. |
 | `GET /health` | Liveness. Touches nothing. |
 | `GET /health/ready` | Readiness. Runs `SELECT 1` on the database. |
 
@@ -206,7 +208,33 @@ uv run --with websockets python scripts/ecosystem_e2e.py \
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `RATE_LIMIT_PER_MINUTE` | `0` | Requests each client may make per minute. Over the limit, the API answers 429 with `Retry-After`. `/health` is exempt. `0` turns the limit off. |
 | `CLIENT_IP_HEADER` | empty | Header that carries the client IP behind a proxy, such as `CF-Connecting-IP` behind Cloudflare. Empty uses the connection's peer address. |
+| `FHIR_BASE_URL` | empty | Base URL of an HL7 FHIR R4 server, such as `https://hapi.fhir.org/baseR4`. Empty turns the FHIR endpoints off, and they answer 503. |
+| `FHIR_TIMEOUT_SECONDS` | `10` | Timeout for each request to the FHIR server. |
 | `CORS_ORIGINS` | empty | Comma-separated browser origins that may call the API, such as `https://console.example.com`. Allows `GET` and `POST` with a `Content-Type` header. Empty turns CORS off. |
+
+## HL7 FHIR
+
+The service reads allergies from an HL7 FHIR R4 server and exports a prescription as FHIR R4. `src/fhir.py` reads and `src/fhir_export.py` exports. Both use the pydantic models of [fhir.resources](https://pypi.org/project/fhir.resources/), so a malformed resource fails validation in either direction. fhir.resources ships R4B, which has the same JSON as R4 for every resource used here.
+
+`POST /api/v1/prescriptions/from-fhir` reads `Patient/{id}`, then searches `AllergyIntolerance?patient=Patient/{id}` and follows up to five pages. It drops an allergy whose `clinicalStatus` is `inactive` or `resolved`, or whose `verificationStatus` is `refuted` or `entered-in-error`. An allergy with no status stays, because a missed allergy is the dangerous error. The allergy name is `code.text`, else the first coding's `display`, else its `code`. Then the request runs the same agents as `POST /api/v1/prescriptions`. The triage entry signs `fhir_patient` and `fhir_allergy_ids`, so an edit to where the allergies came from reads as `INVALID`. The response carries `fhir_patient`.
+
+`GET /api/v1/prescriptions/{thread_id}/fhir` returns a `collection` Bundle with two resources:
+
+- A `MedicationRequest` with the proposed medication, the dosage, the safety notes, and the doctor's comments. Its `subject` is the FHIR patient when the prescription came from FHIR.
+- A `Provenance` whose `signature.data` is the base64 of the audit chain head, the HMAC-SHA256 that `prescriptions.head_hash` stores as hex. A FHIR client can compare it with `GET /api/v1/prescriptions/{thread_id}/audit`.
+
+| Status | `MedicationRequest.status` | `MedicationRequest.intent` |
+|---|---|---|
+| `PENDING_APPROVAL` | `draft` | `proposal` |
+| `APPROVED` | `active` | `order` |
+| `REJECTED` | `cancelled` | `proposal` |
+| `INVALID` | not exported, 409 | |
+
+`scripts/fhir_live.py` checks the integration against a real FHIR server. Start the API with `LLM_PROVIDER=demo` and `FHIR_BASE_URL=https://hapi.fhir.org/baseR4`, then run the script. It creates a synthetic Patient and a Paracetamol allergy on the public HAPI server, tagged `urn:healthtech:synthetic|demo`, and deletes them at the end:
+
+```bash
+uv run python scripts/fhir_live.py http://localhost:8000
+```
 
 ## How the audit chain works
 
@@ -281,6 +309,8 @@ CI (`.github/workflows/ci.yml`) runs two jobs on every pull request and every pu
 ```
 src/
 ├── server.py        FastAPI app, endpoints, and the response projection
+├── fhir.py          FhirClient: a patient's current allergies from a FHIR R4 server
+├── fhir_export.py   A verified prescription as a FHIR R4 Bundle
 ├── graph.py         LangGraph pipeline: triage_agent, then safety_agent
 ├── clinical.py      ClinicalModel protocol, Groq and demo implementations
 ├── audit.py         HMAC-signed audit chain: new_entry, seal_head, verify_chain
@@ -291,6 +321,7 @@ src/
 tests/               pytest suite, runs the real app on a new SQLite or PostgreSQL database per test
 scripts/e2e.py       HTTP end-to-end check, standard library only
 scripts/ecosystem_e2e.py  End-to-end check across this service and SmartDispenser Core
+scripts/fhir_live.py      Manual check against a public FHIR server
 ```
 
 ## License
