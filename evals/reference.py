@@ -31,6 +31,11 @@ def contains_words(text: str, term: str) -> bool:
 class AllergyTable:
     families: dict[str, frozenset[str]]
     aliases: dict[str, str]
+    names: dict[str, frozenset[str]]
+
+    def same_ingredient(self, name: str) -> frozenset[str]:
+        """Every name of the ingredient called `name`, or just `name` if the table has no group for it."""
+        return self.names.get(normalize(name), frozenset({normalize(name)}))
 
     def families_named_in(self, allergy: str) -> set[str]:
         named = {f for f in self.families if contains_words(allergy, f)}
@@ -48,7 +53,12 @@ def load_table(path: Path = FAMILIES_PATH) -> AllergyTable:
     raw = json.loads(path.read_text(encoding="utf-8"))
     families = {normalize(f): frozenset(map(normalize, m)) for f, m in raw["families"].items()}
     aliases = {normalize(a): normalize(f) for a, f in raw["aliases"].items()}
-    return AllergyTable(families=families, aliases=aliases)
+    names = {
+        normalize(name): group
+        for group in (frozenset(map(normalize, g)) for g in raw["names"])
+        for name in group
+    }
+    return AllergyTable(families=families, aliases=aliases, names=names)
 
 
 def blocked_ingredients(allergies: Iterable[str]) -> set[str]:
@@ -65,7 +75,12 @@ def blocked_ingredients(allergies: Iterable[str]) -> set[str]:
 
 
 def matches_any(medication: str, ingredients: Iterable[str]) -> bool:
-    return any(contains_words(medication, ingredient) for ingredient in ingredients)
+    table = load_table()
+    return any(
+        contains_words(medication, name)
+        for ingredient in ingredients
+        for name in table.same_ingredient(ingredient)
+    )
 
 
 def conflicts(medication: str, allergies: Iterable[str]) -> bool:

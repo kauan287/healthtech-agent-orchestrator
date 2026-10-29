@@ -14,7 +14,10 @@ from src.config import Settings
 
 
 class TriageRecommendation(BaseModel):
-    proposed_medication: str = Field(description="Nombre del medicamento o principio activo.")
+    proposed_medication: str = Field(
+        description="Principio activo en español (DCI), sin marca ni forma farmacéutica. "
+        "Por ejemplo 'Azitromicina'."
+    )
     dosage: str = Field(description="Dosis y frecuencia, por ejemplo '500 mg cada 8 horas'.")
     reasoning: str = Field(description="Justificación clínica breve.")
     urgency_level: Literal["ALTO", "MEDIO", "BAJO"] = Field(description="Nivel de urgencia.")
@@ -67,6 +70,8 @@ class GroqClinicalModel:
         - Alergias conocidas: {_allergy_list(allergies)}
 
         Genera una propuesta inicial de tratamiento. Sé precavido.
+        Responde en español. En proposed_medication escribe solo el principio activo en
+        español (DCI), porque la máquina dispensadora busca ese nombre en su stock.
         """
         return cast(TriageRecommendation, self._triage_llm.invoke(prompt))
 
